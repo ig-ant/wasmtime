@@ -1,0 +1,21 @@
+[package]
+name = "clprobe"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "clprobe"
+path = "src/main.rs"
+
+[dependencies]
+cranelift-codegen = { workspace = true, features = ["disas", "x86", "host-arch"] }
+cranelift-frontend = { workspace = true }
+cranelift-module = { workspace = true }
+cranelift-object = { workspace = true }
+cranelift-native = { workspace = true }
+target-lexicon = { workspace = true }
+anyhow = { workspace = true }

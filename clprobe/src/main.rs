@@ -1227,10 +1227,23 @@ fn build_body(
         let cb = b.ins().load(I64, MemFlagsData::trusted().with_readonly(), p_cfr, CFR_CODEBLOCK);
         let mdv = b.ins().load(I64, MemFlagsData::trusted().with_readonly(), cb, CB_METADATA);
         b.def_var(md, mdv);
-        // tag constants
-        let ntv = b.ins().iconst(I64, NUMBER_TAG);
+        // tag constants — laundered through a multi-result root so x64
+        // ISLE's `put_in_reg_mem` does NOT see `.constant = Some(_)` and
+        // sink them to the rip-relative constant pool at every use
+        // (machinst/lower.rs `is_value_use_root`: >1 result ⇒
+        // `InputSourceInst::None`). Per-use `iconst` does NOT help — the
+        // egraph GVNs them back to one value and ISLE pools it regardless
+        // of use count; this is an ISEL choice, not a regalloc2 spill.
+        // With the launder, regalloc2 holds each tag in a GPR for the
+        // function lifetime: `movabs` once in the prologue, then
+        // `test reg,reg` / `and reg,reg` at every site. Eliminates the
+        // ~18 hot-path `[rip+K]` loads that cost B the cycle win vs C-AOT.
+        let zero = b.ins().iconst(I64, 0);
+        let nt0 = b.ins().iconst(I64, NUMBER_TAG);
+        let (ntv, _of1) = b.ins().uadd_overflow(nt0, zero);
         b.def_var(ntag, ntv);
-        let ncv = b.ins().iconst(I64, NOT_CELL_MASK);
+        let nc0 = b.ins().iconst(I64, NOT_CELL_MASK);
+        let (ncv, _of2) = b.ins().uadd_overflow(nc0, zero);
         b.def_var(ncm, ncv);
         // this + args
         let tv = b.ins().load(I64, MemFlagsData::trusted(), p_cfr, CFR_THIS);

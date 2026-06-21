@@ -1409,6 +1409,11 @@ impl Context for IsleContext<'_, '_, MInst, X64Backend> {
         regs::pinned_reg().to_real_reg().unwrap().into()
     }
 
+    #[inline]
+    fn pinned_reg_as_reg(&mut self) -> Reg {
+        regs::pinned_reg()
+    }
+
     fn libcall_1(&mut self, libcall: &LibCall, a: Reg) -> Reg {
         let outputs = emit_vm_call(
             self.lower_ctx,

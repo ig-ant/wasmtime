@@ -29,3 +29,12 @@
       (remat x))
 (rule (simplify x @ (f64const _ _))
       (remat x))
+;; stack_addr lowers to a single `lea r,[rsp+K]` (x64) /
+;; `add r,sp,#K` (aarch64) — same cost class as iconst, and a
+;; spill-reload of its result is strictly worse than re-emitting it.
+;; Without this, a `stack_addr(slot, 0)` repeated at N call sites
+;; GVN-hoists to one entry-block Value and regalloc2 (no remat for
+;; the lowered `lea`) spills it body-wide and reloads at each
+;; fixed-arg call site.
+(rule (simplify x @ (stack_addr _ _ _))
+      (remat x))

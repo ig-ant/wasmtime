@@ -235,6 +235,21 @@ fn lower_to_amode(ctx: &mut Lower<Inst>, spec: InsnInput, offset: i32) -> Amode 
         .memflags(spec.insn)
         .expect("Instruction with amode should have memflags");
 
+    // Sibling of the ISLE `amode_imm_reg_pinned` rule: when the base is
+    // `get_pinned_reg`, address `[r15+disp]` directly. ISLE's `to_amode`
+    // already does this for standalone loads/stores; this Rust-side
+    // helper is the path `sink_load` takes when fusing a load into an
+    // ALU memory operand (`band/iadd/icmp(load(get_pinned_reg, off), x)`
+    // → `op reg, [r15+off]`). Without this case `put_input_in_reg`
+    // below copies r15 into an allocatable temp, and if the
+    // `get_pinned_reg` is a single SHARED prologue value (the common
+    // pattern when r15 holds a frame pointer), one sunk-load use
+    // extends that vreg's liverange across the body and regalloc2
+    // hands it a callee-saved register for a single `[rX+off]` use.
+    if matches_input(ctx, spec, Opcode::GetPinnedReg).is_some() {
+        return Amode::imm_reg(offset, regs::pinned_reg()).with_flags(flags.into());
+    }
+
     // We now either have an add that we must materialize, or some other input; as well as the
     // final offset.
     if let Some(add) = matches_input(ctx, spec, Opcode::Iadd) {

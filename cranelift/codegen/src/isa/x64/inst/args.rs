@@ -461,7 +461,18 @@ impl Amode {
     pub(crate) fn get_operands(&mut self, collector: &mut impl OperandVisitor) {
         match self {
             Amode::ImmReg { base, .. } => {
-                if *base != regs::rbp() && *base != regs::rsp() {
+                // rbp/rsp are never allocatable; the pinned reg (r15)
+                // is likewise removed from the allocatable set when
+                // `enable_pinned_reg` is on. The only way a real r15
+                // reaches here is via the `amode_imm_reg_pinned` ISLE
+                // rule, which is gated on `get_pinned_reg` (i.e. the
+                // flag is on), so treating it like rbp/rsp is sound:
+                // regalloc never needs to place anything in it, and
+                // the encoder reads the physical register directly.
+                if *base != regs::rbp()
+                    && *base != regs::rsp()
+                    && *base != regs::pinned_reg()
+                {
                     collector.reg_use(base);
                 }
             }

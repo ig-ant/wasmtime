@@ -585,6 +585,16 @@
         (Amode.ImmReg offset base flags))
 (rule amode_imm_reg_iadd 1 (amode_imm_reg flags (iadd _ x y) offset)
         (amode_imm_reg_reg_shift flags x y offset))
+;; When the base is the pinned register, address `[r15 + disp]` directly
+;; rather than copying r15 into an allocatable temp first. With
+;; `enable_pinned_reg` on, r15 is removed from the allocatable set, so
+;; the base-case rule above would otherwise force a `mov rX,r15` before
+;; every load/store that uses it as a base — defeating the point of
+;; pinning a hot pointer. `pinned_reg_as_reg` yields the physical r15;
+;; `Amode::get_operands` already skips it (alongside rbp/rsp) so regalloc
+;; sees no constraint and the encoder reads r15 verbatim.
+(rule amode_imm_reg_pinned 2 (amode_imm_reg flags (get_pinned_reg _) offset)
+        (Amode.ImmReg offset (pinned_reg_as_reg) flags))
 
 (attr amode_imm_reg_reg_shift (veri chain))
 (decl amode_imm_reg_reg_shift (MemFlagsData Value Value Offset32) Amode)
@@ -4848,6 +4858,12 @@
 
 (decl preg_pinned () PReg)
 (extern constructor preg_pinned preg_pinned)
+
+;; Physical r15 as a `Reg` (not lowered through `MovFromPReg`). Only valid
+;; when `enable_pinned_reg` is on; used by `amode_imm_reg_pinned` to build
+;; `[r15 + disp]` addressing without an intermediate copy.
+(decl pinned_reg_as_reg () Reg)
+(extern constructor pinned_reg_as_reg pinned_reg_as_reg)
 
 (decl x64_rbp () Reg)
 (rule (x64_rbp)

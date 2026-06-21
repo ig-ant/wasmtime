@@ -1630,6 +1630,16 @@
 (rule (value32_zeros_upper32 (ishl _ _ _)) true)
 (rule (value32_zeros_upper32 (ushr _ _ _)) true)
 (rule (value32_zeros_upper32 (uload32 _ _ _ _)) true)
+;; Lowerings of these all write a 32-bit GPR (`add/sub/imul r32`,
+;; `sar/not/neg r32`) and so zero the upper half. For the `*_overflow`
+;; ops the matched value is the i32 sum result — the i8 flag result is
+;; gated out by the caller's `(value_type $I32)` guard.
+(rule (value32_zeros_upper32 (sadd_overflow _ _ _)) true)
+(rule (value32_zeros_upper32 (ssub_overflow _ _ _)) true)
+(rule (value32_zeros_upper32 (smul_overflow _ _ _)) true)
+(rule (value32_zeros_upper32 (sshr _ _ _)) true)
+(rule (value32_zeros_upper32 (bnot _ _)) true)
+(rule (value32_zeros_upper32 (ineg _ _)) true)
 (rule -1 (value32_zeros_upper32 _) false)
 
 ;;;; Helpers for Working SSE tidbits ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

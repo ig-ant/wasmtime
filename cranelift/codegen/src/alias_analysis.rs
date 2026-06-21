@@ -141,6 +141,15 @@ impl LastStores {
     }
 
     fn meet_from(&mut self, other: &LastStores, loc: Inst) {
+        // NB: arms 2/3 below are dead code — `a.into()` resolves to
+        // std's `From<T> for Option<T>` (always `Some(a)`) because the
+        // arm bodies constrain the inner type to `PackedOption<Inst>`.
+        // The effective semantics is `a == b ? a : loc`, which is the
+        // conservative (sound) meet. Left as-is; the precision loss
+        // for single-pred blocks downstream of a converging join is
+        // handled in `compute_block_input_states` by recomputing the
+        // input from predecessor OUTPUTS on each visit instead of
+        // accumulating into a stale prior input.
         let meet = |a: PackedOption<Inst>, b: PackedOption<Inst>| -> PackedOption<Inst> {
             match (a.into(), b.into()) {
                 (None, None) => None.into(),
@@ -233,6 +242,27 @@ impl<'a> AliasAnalysis<'a> {
     }
 
     fn compute_block_input_states(&mut self, func: &Function) {
+        // Track each block's OUTPUT state and recompute a successor's
+        // INPUT as the meet over its predecessors' current outputs on
+        // every visit. The previous formulation meet'd the successor's
+        // EXISTING input (which may carry a stale earlier-iteration
+        // value) with one predecessor's new output; for a
+        // single-predecessor block downstream of a multi-pred join
+        // that converges over ≥2 worklist iterations, this collapsed
+        // every region slot to `loc` (the block's own first
+        // instruction) even though the unique predecessor's converged
+        // output had a precise value. Recomputing from predecessor
+        // outputs recovers that precision at the cost of one extra
+        // FxHashMap per analysis.
+        let mut block_output: FxHashMap<Block, LastStores> = FxHashMap::default();
+        let mut preds: FxHashMap<Block, smallvec::SmallVec<[Block; 4]>> =
+            FxHashMap::default();
+        for block in func.layout.blocks() {
+            visit_block_succs(func, block, |_inst, succ, _from_table| {
+                preds.entry(succ).or_default().push(block);
+            });
+        }
+
         let mut queue = vec![];
         let mut queue_set = FxHashSet::default();
         let entry = func.layout.entry_block().unwrap();
@@ -241,11 +271,27 @@ impl<'a> AliasAnalysis<'a> {
 
         while let Some(block) = queue.pop() {
             queue_set.remove(&block);
-            let mut state = self
-                .block_input
-                .entry(block)
-                .or_insert_with(|| LastStores::default())
-                .clone();
+
+            // Recompute this block's input from its predecessors'
+            // current outputs. A predecessor without a recorded output
+            // (not yet visited — only reachable via a back-edge from
+            // here) is skipped; its contribution arrives on a later
+            // iteration.
+            let first_inst = func.layout.block_insts(block).next().unwrap();
+            let mut input: Option<LastStores> = None;
+            if let Some(ps) = preds.get(&block) {
+                for &p in ps {
+                    if let Some(pout) = block_output.get(&p) {
+                        match &mut input {
+                            None => input = Some(pout.clone()),
+                            Some(s) => s.meet_from(pout, first_inst),
+                        }
+                    }
+                }
+            }
+            let input = input.unwrap_or_default();
+            self.block_input.insert(block, input.clone());
+            let mut state = input;
 
             trace!(
                 "alias analysis: input to block{} is {:?}",
@@ -258,24 +304,16 @@ impl<'a> AliasAnalysis<'a> {
                 trace!("after inst{}: state is {:?}", inst.index(), state);
             }
 
-            visit_block_succs(func, block, |_inst, succ, _from_table| {
-                let succ_first_inst = func.layout.block_insts(succ).next().unwrap();
-                let updated = match self.block_input.get_mut(&succ) {
-                    Some(succ_state) => {
-                        let old = succ_state.clone();
-                        succ_state.meet_from(&state, succ_first_inst);
-                        *succ_state != old
-                    }
-                    None => {
-                        self.block_input.insert(succ, state.clone());
-                        true
-                    }
-                };
+            let out_changed = block_output.get(&block) != Some(&state);
+            block_output.insert(block, state);
 
-                if updated && queue_set.insert(succ) {
-                    queue.push(succ);
-                }
-            });
+            if out_changed {
+                visit_block_succs(func, block, |_inst, succ, _from_table| {
+                    if queue_set.insert(succ) {
+                        queue.push(succ);
+                    }
+                });
+            }
         }
     }
 

@@ -4530,6 +4530,25 @@
 (rule (lower (get_pinned_reg _))
       (read_pinned_gpr))
 
+;; When the pinned register is the *value* being stored, emit
+;; `mov [addr], r15` directly. The general `store_x64_movrm` rule lowers
+;; the value via the rule above (`read_pinned_gpr` → `MovFromPReg`),
+;; copying r15 into an allocatable temp first; if the store is followed
+;; by a call (the common shape — stash a frame pointer, then dispatch)
+;; that temp must live across it and so claims a callee-saved register
+;; for the whole live range. `pinned_reg_as_reg` yields the physical
+;; r15; `OperandVisitor::reg_use` already treats a real register as
+;; fixed-nonallocatable, so regalloc sees no constraint and the encoder
+;; reads r15 verbatim. Sibling of `amode_imm_reg_pinned`, which folds
+;; the pinned reg on the *address* side.
+(rule store_pinned_reg 5 (lower (store (little_or_native_endian flags)
+                    (get_pinned_reg _)
+                    address
+                    offset))
+      (side_effect
+       (x64_movrm $I64 (to_amode flags address offset)
+                       (gpr_new (pinned_reg_as_reg)))))
+
 ;; Rules for `set_pinned_reg` ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (rule (lower (set_pinned_reg a @ (value_type ty)))

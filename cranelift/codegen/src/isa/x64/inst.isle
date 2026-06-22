@@ -595,6 +595,20 @@
 ;; sees no constraint and the encoder reads r15 verbatim.
 (rule amode_imm_reg_pinned 2 (amode_imm_reg flags (get_pinned_reg _) offset)
         (Amode.ImmReg offset (pinned_reg_as_reg) flags))
+;; Same fold for the three AOT-pinned invariants (r12/r13/r14) under
+;; `enable_aot_csr_regs`. `Amode::get_operands` skips all four physical
+;; registers (see `regs::is_aot_pinned_reg`), so regalloc sees no
+;; constraint and the encoder addresses `[r12/r13/r14 + disp]` directly.
+;; The embedder emits a fresh `get_aot_csrN` per amode use (the
+;; instruction is `other_side_effects` so the egraph won't merge them),
+;; so each load/store base is a separate match — no cross-block
+;; liverange.
+(rule amode_imm_reg_aot_csr0 2 (amode_imm_reg flags (get_aot_csr0 _) offset)
+        (Amode.ImmReg offset (aot_csr0_as_reg) flags))
+(rule amode_imm_reg_aot_csr1 2 (amode_imm_reg flags (get_aot_csr1 _) offset)
+        (Amode.ImmReg offset (aot_csr1_as_reg) flags))
+(rule amode_imm_reg_aot_csr2 2 (amode_imm_reg flags (get_aot_csr2 _) offset)
+        (Amode.ImmReg offset (aot_csr2_as_reg) flags))
 
 (attr amode_imm_reg_reg_shift (veri chain))
 (decl amode_imm_reg_reg_shift (MemFlagsData Value Value Offset32) Amode)
@@ -4874,6 +4888,24 @@
 ;; `[r15 + disp]` addressing without an intermediate copy.
 (decl pinned_reg_as_reg () Reg)
 (extern constructor pinned_reg_as_reg pinned_reg_as_reg)
+
+;; AOT-pinned r12/r13/r14 (`enable_aot_csr_regs`). Same model as the
+;; pinned reg above: a `PReg` form for MovFrom/ToPReg, and a `Reg` form
+;; for direct amode use. The `Reg` forms must only be reached via
+;; `get_aot_csrN` (which the embedder only emits when the flag is on),
+;; otherwise regalloc would see a physical-register operand it owns.
+(decl preg_aot_csr0 () PReg)
+(extern constructor preg_aot_csr0 preg_aot_csr0)
+(decl preg_aot_csr1 () PReg)
+(extern constructor preg_aot_csr1 preg_aot_csr1)
+(decl preg_aot_csr2 () PReg)
+(extern constructor preg_aot_csr2 preg_aot_csr2)
+(decl aot_csr0_as_reg () Reg)
+(extern constructor aot_csr0_as_reg aot_csr0_as_reg)
+(decl aot_csr1_as_reg () Reg)
+(extern constructor aot_csr1_as_reg aot_csr1_as_reg)
+(decl aot_csr2_as_reg () Reg)
+(extern constructor aot_csr2_as_reg aot_csr2_as_reg)
 
 (decl x64_rbp () Reg)
 (rule (x64_rbp)

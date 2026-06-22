@@ -292,13 +292,17 @@ pub(crate) fn emit(
 
         Inst::MovFromPReg { src, dst } => {
             let src: Reg = (*src).into();
-            debug_assert!([regs::rsp(), regs::rbp(), regs::pinned_reg()].contains(&src));
+            debug_assert!(
+                src == regs::rsp() || src == regs::rbp() || regs::is_aot_pinned_reg(src)
+            );
             asm::inst::movq_mr::new(*dst, Gpr::unwrap_new(src)).emit(sink, info, state);
         }
 
         Inst::MovToPReg { src, dst } => {
             let dst: Reg = (*dst).into();
-            debug_assert!([regs::rsp(), regs::rbp(), regs::pinned_reg()].contains(&dst));
+            debug_assert!(
+                dst == regs::rsp() || dst == regs::rbp() || regs::is_aot_pinned_reg(dst)
+            );
             let dst = WritableGpr::from_writable_reg(Writable::from_reg(dst)).unwrap();
             asm::inst::movq_mr::new(dst, *src).emit(sink, info, state);
         }

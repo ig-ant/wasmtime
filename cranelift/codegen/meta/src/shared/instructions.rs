@@ -1274,6 +1274,28 @@ pub(crate) fn define(
         .other_side_effects(),
     );
 
+    // Three additional pinned registers (x64: r12/r13/r14) under
+    // `enable_aot_csr_regs`. Same side-effect model as get/set_pinned_reg:
+    // marked other_side_effects so the egraph doesn't hoist/CSE them (the
+    // amode-fold rules consume them at every use anyway, so a per-use node
+    // is the desired shape — see `amode_imm_reg_pinned`'s comment).
+    for (g, s, doc) in [
+        ("get_aot_csr0", "set_aot_csr0", "first AOT-pinned register (x64: r12)"),
+        ("get_aot_csr1", "set_aot_csr1", "second AOT-pinned register (x64: r13)"),
+        ("get_aot_csr2", "set_aot_csr2", "third AOT-pinned register (x64: r14)"),
+    ] {
+        ig.push(
+            Inst::new(g, doc, &formats.nullary)
+                .operands_out(vec![Operand::new("addr", iAddr)])
+                .other_side_effects(),
+        );
+        ig.push(
+            Inst::new(s, doc, &formats.unary)
+                .operands_in(vec![Operand::new("addr", iAddr)])
+                .other_side_effects(),
+        );
+    }
+
     ig.push(
         Inst::new(
             "get_frame_pointer",

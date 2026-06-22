@@ -59,7 +59,8 @@ impl X64ABIMachineSpec {
         let tmp = regs::r11();
         debug_assert!({
             let real_reg = tmp.to_real_reg().unwrap();
-            !is_callee_save_systemv(real_reg, false) && !is_callee_save_fastcall(real_reg, false)
+            !is_callee_save_systemv(real_reg, PinnedSet::None)
+                && !is_callee_save_fastcall(real_reg, PinnedSet::None)
         });
 
         insts.push(Inst::StackProbeLoop {
@@ -503,7 +504,7 @@ impl ABIMachineSpec for X64ABIMachineSpec {
         // register that is not used as an argument here.
         debug_assert!(!is_callee_save_systemv(
             regs::r10().to_real_reg().unwrap(),
-            false
+            PinnedSet::None
         ));
         regs::r10()
     }
@@ -874,12 +875,19 @@ impl ABIMachineSpec for X64ABIMachineSpec {
     }
 
     fn get_machine_env(flags: &settings::Flags, _call_conv: isa::CallConv) -> &MachineEnv {
-        if flags.enable_pinned_reg() {
-            static MACHINE_ENV: MachineEnv = create_reg_env_systemv(true);
-            &MACHINE_ENV
-        } else {
-            static MACHINE_ENV: MachineEnv = create_reg_env_systemv(false);
-            &MACHINE_ENV
+        match PinnedSet::from_flags(flags) {
+            PinnedSet::AotCsr => {
+                static MACHINE_ENV: MachineEnv = create_reg_env_systemv(PinnedSet::AotCsr);
+                &MACHINE_ENV
+            }
+            PinnedSet::R15 => {
+                static MACHINE_ENV: MachineEnv = create_reg_env_systemv(PinnedSet::R15);
+                &MACHINE_ENV
+            }
+            PinnedSet::None => {
+                static MACHINE_ENV: MachineEnv = create_reg_env_systemv(PinnedSet::None);
+                &MACHINE_ENV
+            }
         }
     }
 
@@ -932,12 +940,12 @@ impl ABIMachineSpec for X64ABIMachineSpec {
             CallConv::Fast | CallConv::SystemV | CallConv::Tail => regs
                 .iter()
                 .cloned()
-                .filter(|r| is_callee_save_systemv(r.to_reg(), flags.enable_pinned_reg()))
+                .filter(|r| is_callee_save_systemv(r.to_reg(), PinnedSet::from_flags(flags)))
                 .collect(),
             CallConv::WindowsFastcall => regs
                 .iter()
                 .cloned()
-                .filter(|r| is_callee_save_fastcall(r.to_reg(), flags.enable_pinned_reg()))
+                .filter(|r| is_callee_save_fastcall(r.to_reg(), PinnedSet::from_flags(flags)))
                 .collect(),
             // The `preserve_all` calling convention makes every reg a callee-save reg.
             CallConv::PreserveAll => regs.iter().cloned().collect(),
@@ -1130,16 +1138,21 @@ fn get_fltreg_for_retval(call_conv: CallConv, fltreg_idx: usize, is_last: bool) 
     }
 }
 
-fn is_callee_save_systemv(r: RealReg, enable_pinned_reg: bool) -> bool {
+fn is_callee_save_systemv(r: RealReg, pin: PinnedSet) -> bool {
     use asm::gpr::enc::*;
 
     match r.class() {
         RegClass::Int => match r.hw_enc() {
-            RBX | RBP | R12 | R13 | R14 => true,
+            RBX | RBP => true,
             // R15 is the pinned register; if we're using it that way,
             // it is effectively globally-allocated, and is not
             // callee-saved.
-            R15 => !enable_pinned_reg,
+            R15 => matches!(pin, PinnedSet::None),
+            // Under `enable_aot_csr_regs`, r12-r14 join r15 as
+            // globally-allocated invariants: not pushed in the
+            // prologue, not allocatable, pass through unchanged.
+            // The embedder's entry trampoline owns their save/restore.
+            R12 | R13 | R14 => !matches!(pin, PinnedSet::AotCsr),
             _ => false,
         },
         RegClass::Float => false,
@@ -1147,15 +1160,16 @@ fn is_callee_save_systemv(r: RealReg, enable_pinned_reg: bool) -> bool {
     }
 }
 
-fn is_callee_save_fastcall(r: RealReg, enable_pinned_reg: bool) -> bool {
+fn is_callee_save_fastcall(r: RealReg, pin: PinnedSet) -> bool {
     use asm::gpr::enc::*;
     use asm::xmm::enc::*;
 
     match r.class() {
         RegClass::Int => match r.hw_enc() {
-            RBX | RBP | RSI | RDI | R12 | R13 | R14 => true,
+            RBX | RBP | RSI | RDI => true,
             // See above for SysV: we must treat the pinned reg specially.
-            R15 => !enable_pinned_reg,
+            R15 => matches!(pin, PinnedSet::None),
+            R12 | R13 | R14 => !matches!(pin, PinnedSet::AotCsr),
             _ => false,
         },
         RegClass::Float => match r.hw_enc() {
@@ -1163,6 +1177,35 @@ fn is_callee_save_fastcall(r: RealReg, enable_pinned_reg: bool) -> bool {
             _ => false,
         },
         RegClass::Vector => unreachable!(),
+    }
+}
+
+/// Which registers are reserved as embedder-pinned (removed from both the
+/// allocatable set and the callee-save set). `R15` = `enable_pinned_reg`
+/// only. `AotCsr` = `enable_aot_csr_regs` (implies r15 + r12/r13/r14).
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub(crate) enum PinnedSet {
+    None,
+    R15,
+    AotCsr,
+}
+impl PinnedSet {
+    pub(crate) fn from_flags(flags: &settings::Flags) -> Self {
+        if flags.enable_aot_csr_regs() {
+            // enable_aot_csr_regs implies enable_pinned_reg: the amode
+            // skip in `Amode::get_operands` and the lowering of
+            // `get_pinned_reg` both assume r15 is reserved; reserving
+            // r12-r14 without r15 has no use case.
+            debug_assert!(
+                flags.enable_pinned_reg(),
+                "enable_aot_csr_regs requires enable_pinned_reg"
+            );
+            PinnedSet::AotCsr
+        } else if flags.enable_pinned_reg() {
+            PinnedSet::R15
+        } else {
+            PinnedSet::None
+        }
     }
 }
 
@@ -1278,7 +1321,7 @@ const fn all_clobbers() -> PRegSet {
         .with(regs::fpr_preg(XMM15))
 }
 
-const fn create_reg_env_systemv(enable_pinned_reg: bool) -> MachineEnv {
+const fn create_reg_env_systemv(pin: PinnedSet) -> MachineEnv {
     const fn preg(r: Reg) -> PReg {
         r.to_real_reg().unwrap().preg()
     }
@@ -1312,11 +1355,9 @@ const fn create_reg_env_systemv(enable_pinned_reg: bool) -> MachineEnv {
         ],
         non_preferred_regs_by_class: [
             // Non-preferred GPRs: callee-saved in the SysV ABI.
-            PRegSet::empty()
-                .with(preg(regs::rbx()))
-                .with(preg(regs::r12()))
-                .with(preg(regs::r13()))
-                .with(preg(regs::r14())),
+            // r12-r14 are conditionally added below (only when NOT
+            // reserved as AOT-pinned invariants).
+            PRegSet::empty().with(preg(regs::rbx())),
             // Non-preferred XMMs: the last 8 registers, which can have larger
             // encodings with AVX instructions.
             PRegSet::empty()
@@ -1336,9 +1377,22 @@ const fn create_reg_env_systemv(enable_pinned_reg: bool) -> MachineEnv {
     };
 
     debug_assert!(regs::PINNED_REG == cranelift_assembler_x64::gpr::enc::R15);
-    if !enable_pinned_reg {
+    // r15 is allocatable iff no pinning at all.
+    if matches!(pin, PinnedSet::None) {
         env.non_preferred_regs_by_class[0] =
             env.non_preferred_regs_by_class[0].with(preg(regs::r15()));
+    }
+    // r12-r14 are allocatable iff not AOT-pinned. Under
+    // `enable_aot_csr_regs` they join r15 as embedder-owned
+    // pass-through registers (read via `get_aot_csr0/1/2`), leaving
+    // rbx as the sole callee-saved GPR available to regalloc. The
+    // embedder accepts the spill-pressure trade for the prologue
+    // shrink (5 push → 1 push) on every generated function.
+    if !matches!(pin, PinnedSet::AotCsr) {
+        env.non_preferred_regs_by_class[0] = env.non_preferred_regs_by_class[0]
+            .with(preg(regs::r12()))
+            .with(preg(regs::r13()))
+            .with(preg(regs::r14()));
     }
 
     env

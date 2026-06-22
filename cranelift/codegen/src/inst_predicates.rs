@@ -96,7 +96,15 @@ pub fn is_mergeable_for_egraph(func: &Function, inst: Inst) -> bool {
 /// but not the get_pinned_reg opcode?
 pub fn has_lowering_side_effect(func: &Function, inst: Inst) -> bool {
     let op = func.dfg.insts[inst].opcode();
-    op != Opcode::GetPinnedReg && (has_side_effect(func, inst) || op.can_load())
+    // GetPinnedReg and GetAotCsr* are marked `other_side_effects` so
+    // the egraph won't move them, but for lowering they are pure
+    // physical-register reads — treating them as side-effecting roots
+    // would force them to materialize even when their only consumer is
+    // an amode that folds the physical register directly.
+    !matches!(
+        op,
+        Opcode::GetPinnedReg | Opcode::GetAotCsr0 | Opcode::GetAotCsr1 | Opcode::GetAotCsr2
+    ) && (has_side_effect(func, inst) || op.can_load())
 }
 
 /// Is the given instruction a constant value (`iconst`, `fconst`) that can be

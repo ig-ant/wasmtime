@@ -1414,6 +1414,32 @@ impl Context for IsleContext<'_, '_, MInst, X64Backend> {
         regs::pinned_reg()
     }
 
+    // ─── AOT-pinned r12/r13/r14 (enable_aot_csr_regs) ────────────────────
+    #[inline]
+    fn preg_aot_csr0(&mut self) -> PReg {
+        regs::aot_csr_reg(0).to_real_reg().unwrap().into()
+    }
+    #[inline]
+    fn preg_aot_csr1(&mut self) -> PReg {
+        regs::aot_csr_reg(1).to_real_reg().unwrap().into()
+    }
+    #[inline]
+    fn preg_aot_csr2(&mut self) -> PReg {
+        regs::aot_csr_reg(2).to_real_reg().unwrap().into()
+    }
+    #[inline]
+    fn aot_csr0_as_reg(&mut self) -> Reg {
+        regs::aot_csr_reg(0)
+    }
+    #[inline]
+    fn aot_csr1_as_reg(&mut self) -> Reg {
+        regs::aot_csr_reg(1)
+    }
+    #[inline]
+    fn aot_csr2_as_reg(&mut self) -> Reg {
+        regs::aot_csr_reg(2)
+    }
+
     fn libcall_1(&mut self, libcall: &LibCall, a: Reg) -> Reg {
         let outputs = emit_vm_call(
             self.lower_ctx,

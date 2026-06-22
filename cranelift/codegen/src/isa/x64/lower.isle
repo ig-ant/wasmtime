@@ -4554,6 +4554,27 @@
 (rule (lower (set_pinned_reg a @ (value_type ty)))
       (side_effect (write_pinned_gpr a)))
 
+;; Rules for `get/set_aot_csr0/1/2` ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Sibling of `get/set_pinned_reg` for the three additional pinned
+;; registers (r12/r13/r14) under `enable_aot_csr_regs`. Same lowering
+;; model: `MovFrom/ToPReg` for the standalone use, and
+;; `amode_imm_reg_aot_csr*` (inst.isle) folds the load/store base case
+;; to `[r12/r13/r14 + disp]` directly. No `store_pinned_reg`-equivalent
+;; — the embedder uses these as load BASES (md/cb-relative), not as
+;; stored values, so the store-side fold is unneeded.
+
+(rule (lower (get_aot_csr0 _)) (mov_from_preg (preg_aot_csr0)))
+(rule (lower (get_aot_csr1 _)) (mov_from_preg (preg_aot_csr1)))
+(rule (lower (get_aot_csr2 _)) (mov_from_preg (preg_aot_csr2)))
+
+(rule (lower (set_aot_csr0 a @ (value_type ty)))
+      (side_effect (mov_to_preg (preg_aot_csr0) a)))
+(rule (lower (set_aot_csr1 a @ (value_type ty)))
+      (side_effect (mov_to_preg (preg_aot_csr1) a)))
+(rule (lower (set_aot_csr2 a @ (value_type ty)))
+      (side_effect (mov_to_preg (preg_aot_csr2) a)))
+
 ;; Rules for `vconst` ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (rule (lower (vconst ty const))

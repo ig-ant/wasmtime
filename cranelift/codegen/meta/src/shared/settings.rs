@@ -120,6 +120,27 @@ pub(crate) fn define() -> SettingGroup {
         false,
     );
 
+    settings.add_bool(
+        "enable_aot_csr_regs",
+        "Reserve three additional callee-saved registers as user-pinned invariants.",
+        r#"
+            On x64 this removes r12/r13/r14 from the allocatable set AND from the
+            callee-save set (so the function prologue does not push them and regalloc
+            never assigns them). Together with enable_pinned_reg (r15), this gives the
+            embedder four invariant registers that pass through every Cranelift function
+            unchanged. Read via get_aot_csr0/1/2, write via set_aot_csr0/1/2.
+
+            This is the AOT-body calling convention used by interpreter-style embedders
+            where a small fixed set of pointers (frame, metadata, vm, codeblock) is live
+            across every generated function and every call between them; setting them up
+            once in a hand-written entry trampoline and passing them through the entire
+            call tree via pinned registers is cheaper than re-deriving on every entry.
+
+            Implies enable_pinned_reg (r15 must also be reserved). Currently x64-only.
+        "#,
+        false,
+    );
+
     settings.add_enum(
         "tls_model",
         "Defines the model used to perform TLS accesses.",

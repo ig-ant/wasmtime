@@ -249,6 +249,21 @@ fn lower_to_amode(ctx: &mut Lower<Inst>, spec: InsnInput, offset: i32) -> Amode 
     if matches_input(ctx, spec, Opcode::GetPinnedReg).is_some() {
         return Amode::imm_reg(offset, regs::pinned_reg()).with_flags(flags.into());
     }
+    // Same for the three AOT-pinned invariants (`enable_aot_csr_regs`):
+    // a sunk `load(get_aot_csrN, off)` feeding an ALU op should address
+    // `[r12/r13/r14 + off]` directly. Without this, `put_input_in_reg`
+    // would copy r12-r14 into a temp — defeating the pin and (since the
+    // embedder emits a fresh `get_aot_csrN` per use) leaving a dead
+    // single-use vreg per sunk load.
+    for (op, idx) in [
+        (Opcode::GetAotCsr0, 0u8),
+        (Opcode::GetAotCsr1, 1),
+        (Opcode::GetAotCsr2, 2),
+    ] {
+        if matches_input(ctx, spec, op).is_some() {
+            return Amode::imm_reg(offset, regs::aot_csr_reg(idx)).with_flags(flags.into());
+        }
+    }
 
     // We now either have an add that we must materialize, or some other input; as well as the
     // final offset.

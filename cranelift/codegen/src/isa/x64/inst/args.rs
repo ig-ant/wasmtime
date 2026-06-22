@@ -469,9 +469,12 @@ impl Amode {
                 // flag is on), so treating it like rbp/rsp is sound:
                 // regalloc never needs to place anything in it, and
                 // the encoder reads the physical register directly.
+                // Same for r12-r14 under `enable_aot_csr_regs` via
+                // `amode_imm_reg_aot_csr*` — the only way a physical
+                // r12/r13/r14 Reg reaches here is via those rules.
                 if *base != regs::rbp()
                     && *base != regs::rsp()
-                    && *base != regs::pinned_reg()
+                    && !regs::is_aot_pinned_reg(*base)
                 {
                     collector.reg_use(base);
                 }

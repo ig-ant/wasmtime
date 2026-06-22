@@ -78,6 +78,32 @@ pub(crate) const fn pinned_reg() -> Reg {
     gpr(PINNED_REG)
 }
 
+/// The three additional pinned registers under `enable_aot_csr_regs`.
+/// Indexed `0..3` → r12/r13/r14 (csr1/csr2/csr3 in LLInt's x86_64
+/// naming; csr4=r15 is `pinned_reg()`). Together with r15 these form
+/// the AOT-body invariant set: removed from the allocatable pool,
+/// removed from the callee-save list, pass through every generated
+/// function unchanged. The embedder's entry trampolines own their
+/// save/restore at the C++↔generated boundary.
+pub(crate) const fn aot_csr_reg(idx: u8) -> Reg {
+    match idx {
+        0 => r12(),
+        1 => r13(),
+        2 => r14(),
+        _ => panic!("aot_csr_reg: idx out of range"),
+    }
+}
+/// True iff `r` is one of the four embedder-pinned registers
+/// (r12/r13/r14/r15). Used by the amode-operand skip and the
+/// MovFrom/ToPReg whitelist; over-approximating to all four is sound
+/// even when only `enable_pinned_reg` is set, because no allocatable
+/// real-register Reg ever reaches those checks (r12-r14 are virtual
+/// when allocatable, and only the `*_as_reg` ISLE constructors
+/// produce a physical-r12/r13/r14 Reg, gated on `get_aot_csrN`).
+pub(crate) fn is_aot_pinned_reg(r: Reg) -> bool {
+    r == r12() || r == r13() || r == r14() || r == pinned_reg()
+}
+
 const fn fpr(enc: u8) -> Reg {
     let preg = fpr_preg(enc);
     Reg::from_virtual_reg(VReg::new(preg.index(), RegClass::Float))

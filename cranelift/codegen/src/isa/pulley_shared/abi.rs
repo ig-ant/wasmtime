@@ -540,6 +540,7 @@ where
             incoming_args_size,
             tail_args_size,
             setup_area_size: setup_area_size.into(),
+            aot_frame_head_size: 0,
             clobber_size,
             fixed_frame_storage_size,
             stackslots_size,

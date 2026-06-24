@@ -609,6 +609,17 @@
         (Amode.ImmReg offset (aot_csr1_as_reg) flags))
 (rule amode_imm_reg_aot_csr2 2 (amode_imm_reg flags (get_aot_csr2 _) offset)
         (Amode.ImmReg offset (aot_csr2_as_reg) flags))
+;; `enable_aot_body_frame`: rbp = cfr (the embedder's logical frame
+;; pointer). `load(get_frame_pointer, off)` should address `[rbp + off]`
+;; directly. rbp is unconditionally non-allocatable on x64 and
+;; `Amode::get_operands` already skips it, so this is the same model as
+;; the pinned-reg fold above — no copy, no liverange extension. The
+;; instruction is pure, so the egraph WILL GVN-merge all
+;; `get_frame_pointer` calls into one value; that's fine — the rule
+;; pattern-matches the merged value at every use site, and the
+;; sunk-load fast-path in `lower_to_amode` covers the ALU-fused case.
+(rule amode_imm_reg_rbp 2 (amode_imm_reg flags (get_frame_pointer _) offset)
+        (Amode.ImmReg offset (rbp_as_reg) flags))
 
 (attr amode_imm_reg_reg_shift (veri chain))
 (decl amode_imm_reg_reg_shift (MemFlagsData Value Value Offset32) Amode)
@@ -4906,6 +4917,13 @@
 (extern constructor aot_csr1_as_reg aot_csr1_as_reg)
 (decl aot_csr2_as_reg () Reg)
 (extern constructor aot_csr2_as_reg aot_csr2_as_reg)
+
+;; Physical rbp as a `Reg` (not lowered through `MovFromPReg`). Used by
+;; `amode_imm_reg_rbp` to build `[rbp + disp]` addressing without an
+;; intermediate copy. rbp is unconditionally non-allocatable so
+;; `Amode::get_operands` skipping it is always sound.
+(decl rbp_as_reg () Reg)
+(extern constructor rbp_as_reg rbp_as_reg)
 
 (decl x64_rbp () Reg)
 (rule (x64_rbp)

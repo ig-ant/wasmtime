@@ -249,6 +249,16 @@ fn lower_to_amode(ctx: &mut Lower<Inst>, spec: InsnInput, offset: i32) -> Amode 
     if matches_input(ctx, spec, Opcode::GetPinnedReg).is_some() {
         return Amode::imm_reg(offset, regs::pinned_reg()).with_flags(flags.into());
     }
+    // `enable_aot_body_frame`: same fold for rbp. `get_frame_pointer` is
+    // pure so the egraph GVN-merges all uses into one value; when that
+    // value feeds a sunk load (`band/icmp/iadd(load(get_frame_pointer,
+    // off), x)` → `op reg, [rbp+off]`), this fast-path keeps the base
+    // physical instead of `put_input_in_reg` extending the shared
+    // value's liverange across the body. rbp is unconditionally
+    // non-allocatable so `Amode::get_operands` skipping it is sound.
+    if matches_input(ctx, spec, Opcode::GetFramePointer).is_some() {
+        return Amode::imm_reg(offset, regs::rbp()).with_flags(flags.into());
+    }
     // Same for the three AOT-pinned invariants (`enable_aot_csr_regs`):
     // a sunk `load(get_aot_csrN, off)` feeding an ALU op should address
     // `[r12/r13/r14 + off]` directly. Without this, `put_input_in_reg`

@@ -1414,6 +1414,11 @@ impl Context for IsleContext<'_, '_, MInst, X64Backend> {
         regs::pinned_reg()
     }
 
+    #[inline]
+    fn rbp_as_reg(&mut self) -> Reg {
+        regs::rbp()
+    }
+
     // ─── AOT-pinned r12/r13/r14 (enable_aot_csr_regs) ────────────────────
     #[inline]
     fn preg_aot_csr0(&mut self) -> PReg {

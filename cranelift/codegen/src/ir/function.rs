@@ -207,6 +207,13 @@ pub struct FunctionStencil {
     /// ensure that a trap happens if the stack pointer goes below the
     /// threshold specified here.
     pub stack_limit: Option<ir::GlobalValue>,
+
+    /// `enable_aot_body_frame`: bytes reserved immediately below rbp,
+    /// above clobber-saves and spill slots. The embedder addresses this
+    /// region directly via `load/store(get_frame_pointer, -off)`; it is
+    /// NOT a sized stack slot. 16-aligned by the embedder (required so
+    /// the post-prologue rsp stays 16-aligned). Zero is a no-op.
+    pub aot_frame_head_bytes: u32,
 }
 
 impl FunctionStencil {
@@ -220,6 +227,7 @@ impl FunctionStencil {
         self.srclocs.clear();
         self.debug_tags.clear();
         self.stack_limit = None;
+        self.aot_frame_head_bytes = 0;
     }
 
     /// Create a `ReplaceBuilder` that will replace `inst` with a new
@@ -420,6 +428,7 @@ impl Function {
                 srclocs: SecondaryMap::new(),
                 stack_limit: None,
                 debug_tags: DebugTags::default(),
+                aot_frame_head_bytes: 0,
             },
             params: FunctionParameters::new(),
         }

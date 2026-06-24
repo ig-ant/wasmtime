@@ -1031,6 +1031,7 @@ impl ABIMachineSpec for S390xMachineDeps {
             // this value to its default.
             tail_args_size: incoming_args_size,
             setup_area_size: 0,
+            aot_frame_head_size: 0,
             clobber_size,
             fixed_frame_storage_size,
             stackslots_size,

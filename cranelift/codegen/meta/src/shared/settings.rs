@@ -141,6 +141,31 @@ pub(crate) fn define() -> SettingGroup {
         false,
     );
 
+    settings.add_bool(
+        "enable_aot_body_frame",
+        "Use rbp as the embedder's logical frame pointer (rbp = JS CallFrame).",
+        r#"
+            x64-only. With this on, the standard `push rbp; mov rbp,rsp` prologue is
+            unchanged, but the CALLER positions rsp such that rbp lands at the embedder's
+            CallFrame base (cfr). The function reserves `Function::aot_frame_head_bytes`
+            immediately below rbp (above clobber-saves and spill slots) for the embedder's
+            cfr-relative locals; the embedder accesses them via `load(get_frame_pointer,
+            -off)` rather than a sized stack slot. The amode-fold rule for
+            `get_frame_pointer` (sibling of `amode_imm_reg_pinned`) lowers each access to a
+            single `[rbp+disp]` operand.
+
+            With enable_aot_csr_regs, this gives the BL-style frame model: rbp = cfr, the
+            cfr-chain (cfr[0] = caller_cfr) is established for free by `push rbp`, and r15
+            is no longer needed as the cfr pin (it goes back to the allocatable set when
+            enable_pinned_reg is OFF — see PinnedSet::AotBodyFrame).
+
+            The frame-head reservation is per-function (`Function::aot_frame_head_bytes`),
+            16-aligned by the embedder, and added to the prologue's `sub rsp,K` after
+            regalloc. With zero head-bytes the frame is identical to the default layout.
+        "#,
+        false,
+    );
+
     settings.add_enum(
         "tls_model",
         "Defines the model used to perform TLS accesses.",

@@ -1064,6 +1064,14 @@ pub struct FrameLayout {
     /// by gen_epilogue_frame_restore.
     pub setup_area_size: u32,
 
+    /// `enable_aot_body_frame`: bytes reserved immediately below the
+    /// setup area (rbp on x64), ABOVE clobber-saves. Addressed by the
+    /// embedder via `load/store(get_frame_pointer, -off)`. Not a sized
+    /// stack slot; not visible to spillslot/stackslot offset
+    /// computation (those are rsp-relative and unaffected). 16-aligned
+    /// by the embedder. Zero on every backend except x64.
+    pub aot_frame_head_size: u32,
+
     /// Size of the area used to save callee-saved clobbered registers.
     /// This area is accessed by code emitted from gen_clobber_save and
     /// gen_clobber_restore.
@@ -1109,7 +1117,10 @@ impl FrameLayout {
     /// The size of FP to SP while the frame is active (not during prologue
     /// setup or epilogue tear down).
     pub fn active_size(&self) -> u32 {
-        self.outgoing_args_size + self.fixed_frame_storage_size + self.clobber_size
+        self.outgoing_args_size
+            + self.fixed_frame_storage_size
+            + self.clobber_size
+            + self.aot_frame_head_size
     }
 
     /// Get the offset from the SP to the sized stack slots area.
@@ -1129,7 +1140,10 @@ impl FrameLayout {
 
     /// Get the offset from SP up to FP.
     pub fn sp_to_fp(&self) -> u32 {
-        self.outgoing_args_size + self.fixed_frame_storage_size + self.clobber_size
+        self.outgoing_args_size
+            + self.fixed_frame_storage_size
+            + self.clobber_size
+            + self.aot_frame_head_size
     }
 }
 
@@ -1179,6 +1193,9 @@ pub struct Callee<M: ABIMachineSpec> {
     /// manually register-allocated and carefully only use caller-saved
     /// registers and keep nothing live after this sequence of instructions.
     stack_limit: Option<(Reg, SmallInstVec<M::I>)>,
+    /// `enable_aot_body_frame`: per-function frame-head reservation.
+    /// Carried from `Function::aot_frame_head_bytes` to `FrameLayout`.
+    aot_frame_head_size: u32,
 
     _mach: PhantomData<M>,
 }
@@ -1303,6 +1320,17 @@ impl<M: ABIMachineSpec> Callee<M> {
             .stack_limit
             .map(|gv| gen_stack_limit::<M>(f, sigs, sig, gv));
 
+        // enable_aot_body_frame: the frame-head reservation must be
+        // 16-aligned so the post-prologue rsp stays 16-aligned (the
+        // embedder rounds ncl to even, but assert here so a mis-set
+        // value fails loudly rather than emitting a misaligned `call`).
+        let aot_frame_head_size = f.aot_frame_head_bytes;
+        debug_assert_eq!(
+            aot_frame_head_size & 15,
+            0,
+            "aot_frame_head_bytes must be 16-aligned"
+        );
+
         let tail_args_size = sigs[sig].sized_stack_arg_space;
 
         Ok(Self {
@@ -1322,6 +1350,7 @@ impl<M: ABIMachineSpec> Callee<M> {
             flags,
             isa_flags: isa_flags.clone(),
             stack_limit,
+            aot_frame_head_size,
             _mach: PhantomData,
         })
     }
@@ -2209,7 +2238,7 @@ impl<M: ABIMachineSpec> Callee<M> {
         let total_stacksize = self.stackslots_size + bytes * spillslots as u32;
         let mask = M::stack_align(self.call_conv) - 1;
         let total_stacksize = (total_stacksize + mask) & !mask; // 16-align the stack.
-        self.frame_layout = Some(M::compute_frame_layout(
+        let mut fl = M::compute_frame_layout(
             self.call_conv,
             &self.flags,
             self.signature(),
@@ -2220,7 +2249,14 @@ impl<M: ABIMachineSpec> Callee<M> {
             self.stackslots_size,
             total_stacksize,
             self.outgoing_args_size,
-        ));
+        );
+        // enable_aot_body_frame: per-function head reservation goes
+        // above clobbers/spills/slots. Set here (post per-backend
+        // compute) so the trait signature stays unchanged and non-x64
+        // backends needn't be aware. x64 gen_clobber_save/restore add
+        // it to the `sub/add rsp,K`; sp_to_fp/active_size include it.
+        fl.aot_frame_head_size = self.aot_frame_head_size;
+        self.frame_layout = Some(fl);
     }
 
     /// Generate a prologue, post-regalloc.
@@ -2248,6 +2284,7 @@ impl<M: ABIMachineSpec> Callee<M> {
         // backtrace support even in leaf functions, so that should be accounted
         // for unconditionally.
         let total_stacksize = (frame_layout.tail_args_size - frame_layout.incoming_args_size)
+            + frame_layout.aot_frame_head_size
             + frame_layout.clobber_size
             + frame_layout.fixed_frame_storage_size
             + frame_layout.outgoing_args_size

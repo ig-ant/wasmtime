@@ -713,10 +713,16 @@ impl ABIMachineSpec for X64ABIMachineSpec {
             });
         }
 
-        // Adjust the stack pointer downward for clobbers and the function fixed
-        // frame (spillslots, storage slots, and argument area).
+        // Adjust the stack pointer downward for clobbers, the function fixed
+        // frame (spillslots, storage slots, and argument area), and — under
+        // `enable_aot_body_frame` — the embedder's frame-head reservation
+        // (`Function::aot_frame_head_bytes`). The head sits immediately
+        // below rbp, ABOVE clobbers; clobber stores below stay rsp-relative
+        // (`clobber_offset` unchanged) so they land at
+        // `[rbp − head − clobber_size + off]`.
         let stack_size = frame_layout.fixed_frame_storage_size
             + frame_layout.clobber_size
+            + frame_layout.aot_frame_head_size
             + frame_layout.outgoing_args_size;
         if stack_size > 0 {
             let rsp = Writable::from_reg(regs::rsp());
@@ -797,6 +803,7 @@ impl ABIMachineSpec for X64ABIMachineSpec {
 
         let stack_size = frame_layout.fixed_frame_storage_size
             + frame_layout.clobber_size
+            + frame_layout.aot_frame_head_size
             + frame_layout.outgoing_args_size;
 
         // Adjust RSP back upward.
@@ -968,6 +975,7 @@ impl ABIMachineSpec for X64ABIMachineSpec {
             incoming_args_size,
             tail_args_size: align_to(tail_args_size, 16),
             setup_area_size,
+            aot_frame_head_size: 0,
             clobber_size,
             fixed_frame_storage_size,
             stackslots_size,

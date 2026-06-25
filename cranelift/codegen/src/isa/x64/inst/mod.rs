@@ -92,6 +92,7 @@ impl Inst {
             | Inst::LoadExtName { .. }
             | Inst::MovFromPReg { .. }
             | Inst::MovToPReg { .. }
+            | Inst::LoadToPReg { .. }
             | Inst::StackProbeLoop { .. }
             | Inst::Args { .. }
             | Inst::Rets { .. }
@@ -540,6 +541,14 @@ impl PrettyPrint for Inst {
                 format!("{op} {src}, {dst}")
             }
 
+            Inst::LoadToPReg { addr, dst } => {
+                let addr = addr.pretty_print(8);
+                let dst: Reg = (*dst).into();
+                let dst = pretty_print_reg(dst, 8);
+                let op = ljustify("movq".to_string());
+                format!("{op} {addr}, {dst}")
+            }
+
             Inst::XmmCmove {
                 ty,
                 cc,
@@ -912,6 +921,10 @@ fn x64_get_operands(inst: &mut Inst, collector: &mut impl OperandVisitor) {
         Inst::MovToPReg { dst, src } => {
             debug_assert!(src.to_reg().is_virtual());
             collector.reg_use(src);
+            collector.reg_fixed_nonallocatable(*dst);
+        }
+        Inst::LoadToPReg { addr, dst } => {
+            addr.get_operands(collector);
             collector.reg_fixed_nonallocatable(*dst);
         }
         Inst::CvtUint64ToFloatSeq {

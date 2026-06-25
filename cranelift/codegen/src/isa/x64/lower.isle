@@ -4549,6 +4549,21 @@
        (x64_movrm $I64 (to_amode flags address offset)
                        (gpr_new (pinned_reg_as_reg)))))
 
+;; D3a-tighten (b): `store(get_frame_pointer, addr, off)` →
+;; `mov [addr+off], rbp` directly. The AOT body's `vm.topCallFrame =
+;; cfr` (entry block + post-call) is the only producer; without this
+;; rule `get_frame_pointer` lowers via `mov_from_preg(preg_rbp)` to a
+;; vreg first (`mov tmp,rbp; mov [r13+K],tmp`). rbp is unconditionally
+;; non-allocatable so `reg_maybe_fixed` treats it as
+;; fixed-nonallocatable — same model as `store_pinned_reg` above.
+(rule store_frame_pointer 5 (lower (store (little_or_native_endian flags)
+                    (get_frame_pointer $I64)
+                    address
+                    offset))
+      (side_effect
+       (x64_movrm $I64 (to_amode flags address offset)
+                       (gpr_new (rbp_as_reg)))))
+
 ;; Rules for `set_pinned_reg` ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (rule (lower (set_pinned_reg a @ (value_type ty)))
@@ -4574,6 +4589,23 @@
       (side_effect (mov_to_preg (preg_aot_csr1) a)))
 (rule (lower (set_aot_csr2 a @ (value_type ty)))
       (side_effect (mov_to_preg (preg_aot_csr2) a)))
+
+;; D3a-tighten (a): fold a single-use load directly into the preg
+;; write — `set_aot_csrN(load(addr, off))` → `mov rN, [addr+off]`.
+;; The body's entry-derive (`r14=[rbp+0x10]; r13=[rdi+go_vm];
+;; r12=[r14+cb_md]`) is 3× this shape per body; without the fold each
+;; lowers as `mov tmp,[m]; mov rN,tmp`. `sinkable_load` gates on
+;; single-use so a load whose result is read elsewhere falls through
+;; to the 2i form above (correct: re-loading would re-issue the
+;; memory access at a later program point).
+(rule 1 (lower (set_aot_csr0 (and (sinkable_load sl) (value_type $I64))))
+      (side_effect (load_to_preg (preg_aot_csr0) (sink_load sl))))
+(rule 1 (lower (set_aot_csr1 (and (sinkable_load sl) (value_type $I64))))
+      (side_effect (load_to_preg (preg_aot_csr1) (sink_load sl))))
+(rule 1 (lower (set_aot_csr2 (and (sinkable_load sl) (value_type $I64))))
+      (side_effect (load_to_preg (preg_aot_csr2) (sink_load sl))))
+(rule 1 (lower (set_pinned_reg (and (sinkable_load sl) (value_type $I64))))
+      (side_effect (load_to_preg (preg_pinned) (sink_load sl))))
 
 ;; Rules for `vconst` ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

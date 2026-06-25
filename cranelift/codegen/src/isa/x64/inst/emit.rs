@@ -307,6 +307,13 @@ pub(crate) fn emit(
             asm::inst::movq_mr::new(dst, *src).emit(sink, info, state);
         }
 
+        Inst::LoadToPReg { addr, dst } => {
+            let dst: Reg = (*dst).into();
+            debug_assert!(regs::is_aot_pinned_reg(dst));
+            let dst = WritableGpr::from_writable_reg(Writable::from_reg(dst)).unwrap();
+            asm::inst::movq_rm::new(dst, addr.clone()).emit(sink, info, state);
+        }
+
         Inst::XmmCmove {
             ty,
             cc,

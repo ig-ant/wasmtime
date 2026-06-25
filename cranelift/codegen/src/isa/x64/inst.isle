@@ -39,6 +39,13 @@
        (MovToPReg (src Gpr)
                   (dst PReg))
 
+       ;; `mov preg, [mem]` — fused load into a physical register.
+       ;; For `set_aot_csrN(load …)` / `set_pinned_reg(load …)` folding
+       ;; (one instruction instead of `mov tmp,[m]; mov preg,tmp`). The
+       ;; amode collects its own operands; `dst` is fixed-nonallocatable.
+       (LoadToPReg (addr SyntheticAmode)
+                   (dst PReg))
+
        ;; =========================================
        ;; Conditional moves.
 
@@ -4884,6 +4891,10 @@
 (decl mov_to_preg (PReg Gpr) SideEffectNoResult)
 (rule (mov_to_preg dst src)
       (SideEffectNoResult.Inst (MInst.MovToPReg src dst)))
+
+(decl load_to_preg (PReg SyntheticAmode) SideEffectNoResult)
+(rule (load_to_preg dst addr)
+      (SideEffectNoResult.Inst (MInst.LoadToPReg addr dst)))
 
 (decl preg_rbp () PReg)
 (extern constructor preg_rbp preg_rbp)

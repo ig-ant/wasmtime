@@ -496,6 +496,7 @@ pub trait ABIMachineSpec {
         stackslots_size: u32,
         fixed_frame_storage_size: u32,
         outgoing_args_size: u32,
+        aot_frame_head_size: u32,
     ) -> FrameLayout;
 
     /// Generate the usual frame-setup sequence for this architecture: e.g.,
@@ -2238,7 +2239,14 @@ impl<M: ABIMachineSpec> Callee<M> {
         let total_stacksize = self.stackslots_size + bytes * spillslots as u32;
         let mask = M::stack_align(self.call_conv) - 1;
         let total_stacksize = (total_stacksize + mask) & !mask; // 16-align the stack.
-        let mut fl = M::compute_frame_layout(
+        // enable_aot_body_frame: per-function head reservation goes
+        // above clobbers/spills/slots. Passed through so x64 can
+        // gate the forced rbx+r12-r15 clobber-save on it (D3a-2:
+        // bodies have head>0, stubs have head==0; stubs don't
+        // rewrite the csr regs so the forced save is wasteful
+        // there). x64 gen_clobber_save/restore add it to the
+        // `sub/add rsp,K`; sp_to_fp/active_size include it.
+        self.frame_layout = Some(M::compute_frame_layout(
             self.call_conv,
             &self.flags,
             self.signature(),
@@ -2249,14 +2257,8 @@ impl<M: ABIMachineSpec> Callee<M> {
             self.stackslots_size,
             total_stacksize,
             self.outgoing_args_size,
-        );
-        // enable_aot_body_frame: per-function head reservation goes
-        // above clobbers/spills/slots. Set here (post per-backend
-        // compute) so the trait signature stays unchanged and non-x64
-        // backends needn't be aware. x64 gen_clobber_save/restore add
-        // it to the `sub/add rsp,K`; sp_to_fp/active_size include it.
-        fl.aot_frame_head_size = self.aot_frame_head_size;
-        self.frame_layout = Some(fl);
+            self.aot_frame_head_size,
+        ));
     }
 
     /// Generate a prologue, post-regalloc.

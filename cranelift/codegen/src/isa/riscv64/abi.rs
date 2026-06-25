@@ -646,6 +646,7 @@ impl ABIMachineSpec for Riscv64MachineDeps {
         stackslots_size: u32,
         fixed_frame_storage_size: u32,
         outgoing_args_size: u32,
+        _aot_frame_head_size: u32,
     ) -> FrameLayout {
         let is_callee_saved = |reg: &Writable<RealReg>| match call_conv {
             isa::CallConv::PreserveAll => true,

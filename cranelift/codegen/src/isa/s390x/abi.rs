@@ -952,6 +952,7 @@ impl ABIMachineSpec for S390xMachineDeps {
         stackslots_size: u32,
         fixed_frame_storage_size: u32,
         mut outgoing_args_size: u32,
+        _aot_frame_head_size: u32,
     ) -> FrameLayout {
         assert!(
             !flags.enable_pinned_reg(),

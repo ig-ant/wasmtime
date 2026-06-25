@@ -1229,6 +1229,7 @@ impl ABIMachineSpec for AArch64MachineDeps {
         stackslots_size: u32,
         fixed_frame_storage_size: u32,
         outgoing_args_size: u32,
+        _aot_frame_head_size: u32,
     ) -> FrameLayout {
         let mut regs: Vec<Writable<RealReg>> = regs
             .iter()

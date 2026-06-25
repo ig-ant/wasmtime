@@ -937,6 +937,7 @@ impl ABIMachineSpec for X64ABIMachineSpec {
         stackslots_size: u32,
         fixed_frame_storage_size: u32,
         outgoing_args_size: u32,
+        aot_frame_head_size: u32,
     ) -> FrameLayout {
         debug_assert!(tail_args_size >= incoming_args_size);
 
@@ -970,12 +971,19 @@ impl ABIMachineSpec for X64ABIMachineSpec {
         // asm-LLInt prologue) become tail-jumps with no per-edge csr
         // save/restore. 4 stores + 4 loads per invocation; the
         // body→body thunk sheds 13i in exchange.
-        // rbx too: the LLInt→body entry shim is a tail-jump (no
-        // frame of its own to save rbx in), and the body's regalloc
-        // may not touch rbx — force the save so the LLInt's rbx
-        // (and the body→body caller's, and the host's via FromHost)
-        // is preserved unconditionally.
-        if flags.enable_aot_body_frame() {
+        // rbx too: the LLInt→body entry shim has no frame of its
+        // own to save rbx in, and the body's regalloc may not touch
+        // rbx — force the save so the LLInt's rbx (and the body→body
+        // caller's, and the host's via FromHost) is preserved
+        // unconditionally. D3a-2: gated on `aot_frame_head_size > 0`
+        // — bodies set it (= ncl*8); stubs/thunks don't (they READ
+        // r12-r15 but never rewrite them, so the forced save would
+        // be a per-stub-call no-op costing ~80 B .text × ~30K
+        // chunk-level stub functions ≈ 2.4 MB). A body with ncl=0
+        // (no JS locals — degenerate, never observed on the prod
+        // corpus) would skip the save and corrupt the LLInt's csr;
+        // body.rs sets head = max(ncl, 2) * 8 to defend.
+        if flags.enable_aot_body_frame() && aot_frame_head_size > 0 {
             use asm::gpr::enc::*;
             for enc in [RBX, R12, R13, R14, R15] {
                 let r = Writable::from_reg(
@@ -1002,7 +1010,7 @@ impl ABIMachineSpec for X64ABIMachineSpec {
             incoming_args_size,
             tail_args_size: align_to(tail_args_size, 16),
             setup_area_size,
-            aot_frame_head_size: 0,
+            aot_frame_head_size,
             clobber_size,
             fixed_frame_storage_size,
             stackslots_size,

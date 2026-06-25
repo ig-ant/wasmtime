@@ -1009,6 +1009,18 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
         // When considering code-motion opportunities, consider the current
         // program point to be this branch.
         self.cur_inst = Some(branch);
+        // …including its scan colour. `lower_clif_branch` runs *before*
+        // `lower_clif_block` for each lowered block, so without this
+        // `cur_scan_entry_color` still holds whatever the previous
+        // block's backward scan left it at, and
+        // `get_value_as_source_or_const`'s `entry_color + 1 ==
+        // cur_scan_entry_color` test never matches for a load reached
+        // through e.g. `brif (icmp _ a (load …))`. Branches are always
+        // colour-bearing roots, so the entry colour is in the map.
+        self.cur_scan_entry_color = self
+            .side_effect_inst_entry_colors
+            .get(&branch)
+            .copied();
 
         // Lower the branch in ISLE.
         backend

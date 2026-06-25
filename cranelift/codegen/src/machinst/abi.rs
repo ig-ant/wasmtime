@@ -1197,6 +1197,10 @@ pub struct Callee<M: ABIMachineSpec> {
     /// `enable_aot_body_frame`: per-function frame-head reservation.
     /// Carried from `Function::aot_frame_head_bytes` to `FrameLayout`.
     aot_frame_head_size: u32,
+    /// Carried from `Function::dedup_epilogue`; read by `VCode::emit`
+    /// to decide whether to emit one shared epilogue (with each `Ret`
+    /// branching to it) or expand `gen_epilogue()` inline per `Ret`.
+    dedup_epilogue: bool,
 
     _mach: PhantomData<M>,
 }
@@ -1352,8 +1356,15 @@ impl<M: ABIMachineSpec> Callee<M> {
             isa_flags: isa_flags.clone(),
             stack_limit,
             aot_frame_head_size,
+            dedup_epilogue: f.dedup_epilogue,
             _mach: PhantomData,
         })
+    }
+
+    /// Whether `VCode::emit` should emit one shared epilogue and lower
+    /// every `Ret` to a branch into it. See `Function::dedup_epilogue`.
+    pub fn dedup_epilogue(&self) -> bool {
+        self.dedup_epilogue
     }
 
     /// Inserts instructions necessary for checking the stack limit into the

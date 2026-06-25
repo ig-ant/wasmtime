@@ -820,7 +820,67 @@ impl<I: VCodeInst> VCode<I> {
         };
         let mut total_bb_padding = 0;
 
-        for &block in final_order.iter() {
+        // Shared-epilogue dedup. Without this, every `MachTerminator::Ret`
+        // expands `gen_epilogue()` inline (clobber-restore + frame-restore
+        // + ret). For functions with several return paths the epilogue is
+        // duplicated at each. When the embedder has opted in (via a
+        // non-zero `aot_frame_head_size`, which on x64 also forces a
+        // 5×CSR clobber-save and so a 9-instruction epilogue), emit ONE
+        // epilogue at the end of the non-cold partition and lower every
+        // `Ret` to `gen_jump(.Lepi)`. The last hot block's `jmp .Lepi`
+        // is chomped by `MachBuffer` (target bound immediately after),
+        // so the typical "single hot return at function end" case is
+        // identical to the per-Ret expansion. Regalloc is unchanged
+        // (each `Ret` keeps its own retval-reg constraint); only emit
+        // is affected.
+        //
+        // Gated on `Function::dedup_epilogue` (a per-function opt-in)
+        // so every other code path stays byte-identical.
+        let want_shared_epi = self.abi.dedup_epilogue();
+        let shared_epi_label = if want_shared_epi {
+            Some(buffer.get_label())
+        } else {
+            None
+        };
+        let first_cold_idx = final_order.len() - cold_blocks.len();
+        let mut any_ret = false;
+        let mut emitted_shared_epi = false;
+
+        // Emit the single shared epilogue body. Inlined (rather than via
+        // the per-block `do_emit` closure) so it can run between blocks.
+        // The epilogue is short (≤16 insts) and contains no constant-pool
+        // refs, so the island-deadline check `do_emit` carries is not
+        // needed here.
+        let mut emit_shared_epi =
+            |disasm: &mut String, buffer: &mut MachBuffer<I>, state: &mut I::State| {
+                buffer.bind_label(shared_epi_label.unwrap(), state.ctrl_plane_mut());
+                if want_disasm {
+                    writeln!(disasm, ".Lepi:").unwrap();
+                }
+                for inst in self.abi.gen_epilogue() {
+                    if want_disasm {
+                        let mut s = state.clone();
+                        writeln!(disasm, "  {}", inst.pretty_print_inst(&mut s)).unwrap();
+                    }
+                    inst.emit(buffer, &self.emit_info, state);
+                }
+            };
+
+        for (final_idx, &block) in final_order.iter().enumerate() {
+            // Shared-epilogue body: emit once, immediately after the
+            // last non-cold block. `bind_label` participates in
+            // `MachBuffer`'s branch-chomping, so a `jmp .Lepi`
+            // terminator on the last non-cold block is removed. If no
+            // non-cold block returned (or there are no cold blocks),
+            // emission is deferred to after the loop.
+            if want_shared_epi
+                && !emitted_shared_epi
+                && any_ret
+                && final_idx == first_cold_idx
+            {
+                emit_shared_epi(&mut disasm, &mut buffer, &mut state);
+                emitted_shared_epi = true;
+            }
             trace!("emitting block {:?}", block);
 
             // Call the new block hook for state
@@ -999,9 +1059,21 @@ impl<I: VCodeInst> VCode<I> {
                         // (and don't emit the return; the actual
                         // epilogue will contain it).
                         if self.insts[iix.index()].is_term() == MachTerminator::Ret {
-                            log::trace!("emitting epilogue");
-                            for inst in self.abi.gen_epilogue() {
-                                do_emit(&inst, &mut disasm, &mut buffer, &mut state);
+                            any_ret = true;
+                            if let Some(label) = shared_epi_label {
+                                // Shared-epilogue: emit `jmp .Lepi`.
+                                // The retval-reg copy (if any) is the
+                                // regalloc edit preceding this Ret, so
+                                // %rax already holds the return value;
+                                // the epilogue itself is rv-independent.
+                                log::trace!("emitting jmp to shared epilogue");
+                                let jmp = I::gen_jump(label);
+                                do_emit(&jmp, &mut disasm, &mut buffer, &mut state);
+                            } else {
+                                log::trace!("emitting epilogue");
+                                for inst in self.abi.gen_epilogue() {
+                                    do_emit(&inst, &mut disasm, &mut buffer, &mut state);
+                                }
                             }
                         } else {
                             // Update the operands for this inst using the
@@ -1118,6 +1190,22 @@ impl<I: VCodeInst> VCode<I> {
                 if total_bb_padding > (150 << 20) {
                     bb_padding = Vec::new();
                 }
+            }
+        }
+
+        // Shared-epilogue body, deferred case: either the function has
+        // no cold blocks (so the in-loop `final_idx == first_cold_idx`
+        // never fired), or no non-cold block returned. Emit at the
+        // tail. `MachBuffer` chomps the trailing `jmp .Lepi` in the
+        // no-cold-blocks case. If `!any_ret` the function never
+        // returns (every path traps/tailcalls); bind the label to the
+        // tail anyway so any pending fixup resolves, but don't emit
+        // the dead epilogue.
+        if want_shared_epi && !emitted_shared_epi {
+            if any_ret {
+                emit_shared_epi(&mut disasm, &mut buffer, &mut state);
+            } else {
+                buffer.bind_label(shared_epi_label.unwrap(), state.ctrl_plane_mut());
             }
         }
 

@@ -214,6 +214,17 @@ pub struct FunctionStencil {
     /// NOT a sized stack slot. 16-aligned by the embedder (required so
     /// the post-prologue rsp stays 16-aligned). Zero is a no-op.
     pub aot_frame_head_bytes: u32,
+
+    /// When set, emit a single shared epilogue per function and lower
+    /// every `return` to a branch into it (instead of expanding
+    /// `gen_epilogue()` inline at each `Ret`). Regalloc is unchanged —
+    /// each `return` keeps its own retval-reg constraint; only
+    /// `VCode::emit` is affected. Intended for embedders whose
+    /// functions have several return paths and a non-trivial clobber-
+    /// restore sequence (e.g. `aot_frame_head_bytes > 0`, which on x64
+    /// forces a 5×CSR save). Default `false` keeps every other code
+    /// path byte-identical.
+    pub dedup_epilogue: bool,
 }
 
 impl FunctionStencil {
@@ -228,6 +239,7 @@ impl FunctionStencil {
         self.debug_tags.clear();
         self.stack_limit = None;
         self.aot_frame_head_bytes = 0;
+        self.dedup_epilogue = false;
     }
 
     /// Create a `ReplaceBuilder` that will replace `inst` with a new
@@ -429,6 +441,7 @@ impl Function {
                 stack_limit: None,
                 debug_tags: DebugTags::default(),
                 aot_frame_head_bytes: 0,
+                dedup_epilogue: false,
             },
             params: FunctionParameters::new(),
         }

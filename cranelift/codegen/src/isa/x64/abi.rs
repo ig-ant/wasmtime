@@ -959,6 +959,33 @@ impl ABIMachineSpec for X64ABIMachineSpec {
             CallConv::Probestack => todo!("probestack?"),
             CallConv::AppleAarch64 => unreachable!(),
         };
+        // `enable_aot_body_frame`: r12-r15 are pinned (not allocatable,
+        // not in regalloc's clobbered set) but the BODY rewrites them
+        // via `set_aot_csr*`/`set_pinned_reg` after the prologue. Force
+        // them into clobbered_callee_saves so the prologue saves the
+        // CALLER's values (LLInt's csr1-4 for the asm-LLInt→body edge;
+        // the caller body's md/vm/cb for body→body) and the epilogue
+        // restores them. This makes every body a proper SystemV callee
+        // w.r.t. r12-r15 — the entry thunks (thick / FromHost / the
+        // asm-LLInt prologue) become tail-jumps with no per-edge csr
+        // save/restore. 4 stores + 4 loads per invocation; the
+        // body→body thunk sheds 13i in exchange.
+        // rbx too: the LLInt→body entry shim is a tail-jump (no
+        // frame of its own to save rbx in), and the body's regalloc
+        // may not touch rbx — force the save so the LLInt's rbx
+        // (and the body→body caller's, and the host's via FromHost)
+        // is preserved unconditionally.
+        if flags.enable_aot_body_frame() {
+            use asm::gpr::enc::*;
+            for enc in [RBX, R12, R13, R14, R15] {
+                let r = Writable::from_reg(
+                    Reg::from(regs::gpr_preg(enc)).to_real_reg().unwrap());
+                if !regs.contains(&r) {
+                    regs.push(r);
+                }
+            }
+        }
+
         // Sort registers for deterministic code output. We can do an unstable sort because the
         // registers will be unique (there are no dups).
         regs.sort_unstable();

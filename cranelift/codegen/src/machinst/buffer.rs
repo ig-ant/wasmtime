@@ -3570,3 +3570,180 @@ mod test {
         let _ = buf.total_size();
     }
 }
+
+#[cfg(all(test, feature = "x86"))]
+mod relax_test {
+    use super::*;
+    use crate::ir::TrapCode;
+    use crate::isa::x64;
+    use crate::isa::x64::{EmitInfo, Inst, args::CC};
+    use crate::machinst::{MachInstEmit, MachInstEmitState};
+    use crate::settings;
+
+    fn label(n: u32) -> MachLabel {
+        MachLabel::from_block(BlockIndex::new(n as usize))
+    }
+
+    fn emit_info() -> EmitInfo {
+        let flags = settings::Flags::new(settings::builder());
+        let isa_flags = x64::settings::Flags::new(&flags, &x64::settings::builder());
+        EmitInfo::new(flags, isa_flags)
+    }
+
+    /// Emit exactly `n` bytes of single-byte NOP padding (relax treats
+    /// this as one opaque span — no internal labels or fixups).
+    fn nops(
+        buf: &mut MachBuffer<Inst>,
+        _info: &EmitInfo,
+        _state: &mut <Inst as MachInstEmit>::State,
+        n: usize,
+    ) {
+        for _ in 0..n {
+            buf.put1(0x90);
+        }
+    }
+
+    #[test]
+    fn relax_forward_jcc() {
+        let info = emit_info();
+        let mut buf = MachBuffer::new();
+        let mut state = <Inst as MachInstEmit>::State::default();
+        let constants = Default::default();
+        buf.reserve_labels_for_blocks(2);
+
+        // block0: WinchJmpIf emits a bare 6B `0F 85` rel32 (no
+        // accompanying uncond, so MachBuffer's chomp doesn't touch it).
+        buf.bind_label(label(0), state.ctrl_plane_mut());
+        Inst::WinchJmpIf { cc: CC::NZ, taken: label(1) }
+            .emit(&mut buf, &info, &mut state);
+        nops(&mut buf, &info, &mut state, 100);
+        buf.bind_label(label(1), state.ctrl_plane_mut());
+
+        let buf = buf.finish(&constants, state.ctrl_plane_mut());
+        // 2-byte short jne (75 64) + 100 bytes nop = 102.
+        assert_eq!(buf.total_size(), 102);
+        assert_eq!(buf.data()[0], 0x75); // jne rel8
+        assert_eq!(buf.data()[1] as i8, 100); // disp8 = +100
+    }
+
+    #[test]
+    fn relax_backward_jmp() {
+        let info = emit_info();
+        let mut buf = MachBuffer::new();
+        let mut state = <Inst as MachInstEmit>::State::default();
+        let constants = Default::default();
+        buf.reserve_labels_for_blocks(2);
+
+        // block0: <120B nop>; block1: jmp block0
+        buf.bind_label(label(0), state.ctrl_plane_mut());
+        nops(&mut buf, &info, &mut state, 120);
+        buf.bind_label(label(1), state.ctrl_plane_mut());
+        Inst::JmpKnown { dst: label(0) }.emit(&mut buf, &info, &mut state);
+
+        let buf = buf.finish(&constants, state.ctrl_plane_mut());
+        // 120 + 2-byte short jmp.
+        assert_eq!(buf.total_size(), 122);
+        assert_eq!(buf.data()[120], 0xeb);
+        assert_eq!(buf.data()[121] as i8, -122);
+    }
+
+    #[test]
+    fn relax_out_of_range_stays_long() {
+        let info = emit_info();
+        let mut buf = MachBuffer::new();
+        let mut state = <Inst as MachInstEmit>::State::default();
+        let constants = Default::default();
+        buf.reserve_labels_for_blocks(2);
+
+        buf.bind_label(label(0), state.ctrl_plane_mut());
+        Inst::WinchJmpIf { cc: CC::Z, taken: label(1) }
+            .emit(&mut buf, &info, &mut state);
+        nops(&mut buf, &info, &mut state, 200);
+        buf.bind_label(label(1), state.ctrl_plane_mut());
+
+        let buf = buf.finish(&constants, state.ctrl_plane_mut());
+        // 6-byte long je + 200.
+        assert_eq!(buf.total_size(), 206);
+        assert_eq!(buf.data()[0], 0x0f);
+        assert_eq!(buf.data()[1], 0x84);
+    }
+
+    #[test]
+    fn relax_cascade_brings_into_range() {
+        // Site A targets a label that is 130 bytes ahead in the long-form
+        // layout — out of rel8 range. But between A and its target sits
+        // site B, a short-range jcc that *does* fit rel8 on the first
+        // pass; once B shrinks by 4 bytes, A's target moves to +126 and A
+        // fits on the second pass.
+        let info = emit_info();
+        let mut buf = MachBuffer::new();
+        let mut state = <Inst as MachInstEmit>::State::default();
+        let constants = Default::default();
+        buf.reserve_labels_for_blocks(3);
+
+        buf.bind_label(label(0), state.ctrl_plane_mut());
+        // A: jne label2 — long form 6B; label2 is at 6+60+6+64 = 136,
+        // disp_long = 136-6 = 130 → out of rel8.
+        Inst::WinchJmpIf { cc: CC::NZ, taken: label(2) }
+            .emit(&mut buf, &info, &mut state);
+        nops(&mut buf, &info, &mut state, 60);
+        // B: je label1 — disp_long = 64; relaxes on pass 1.
+        Inst::WinchJmpIf { cc: CC::Z, taken: label(1) }
+            .emit(&mut buf, &info, &mut state);
+        nops(&mut buf, &info, &mut state, 64);
+        buf.bind_label(label(1), state.ctrl_plane_mut());
+        buf.bind_label(label(2), state.ctrl_plane_mut());
+
+        let buf = buf.finish(&constants, state.ctrl_plane_mut());
+        // Both relax to 2B: 2 + 60 + 2 + 64 = 128.
+        assert_eq!(buf.total_size(), 128);
+        assert_eq!(buf.data()[0], 0x75);
+        assert_eq!(buf.data()[1] as i8, 126); // A: 128 - 2 = 126
+        assert_eq!(buf.data()[62], 0x74);
+        assert_eq!(buf.data()[63] as i8, 64); // B: 128 - 64 = 64
+    }
+
+    #[test]
+    fn relax_shifts_side_tables() {
+        let info = emit_info();
+        let mut buf = MachBuffer::new();
+        let mut state = <Inst as MachInstEmit>::State::default();
+        let constants = Default::default();
+        buf.reserve_labels_for_blocks(2);
+
+        buf.bind_label(label(0), state.ctrl_plane_mut());
+        Inst::WinchJmpIf { cc: CC::NZ, taken: label(1) }
+            .emit(&mut buf, &info, &mut state);
+        nops(&mut buf, &info, &mut state, 30);
+        // Trap at original offset 6+30 = 36.
+        buf.add_trap(TrapCode::INTEGER_OVERFLOW);
+        nops(&mut buf, &info, &mut state, 30);
+        buf.bind_label(label(1), state.ctrl_plane_mut());
+
+        let buf = buf.finish(&constants, state.ctrl_plane_mut());
+        // jne relaxes 6→2; trap shifts 36→32.
+        assert_eq!(buf.total_size(), 62);
+        assert_eq!(buf.traps()[0].offset, 32);
+    }
+
+    #[test]
+    fn relax_disabled_keeps_long_form() {
+        let info = emit_info();
+        let mut buf = MachBuffer::new();
+        buf.set_branch_relax(false);
+        let mut state = <Inst as MachInstEmit>::State::default();
+        let constants = Default::default();
+        buf.reserve_labels_for_blocks(2);
+
+        buf.bind_label(label(0), state.ctrl_plane_mut());
+        Inst::WinchJmpIf { cc: CC::NZ, taken: label(1) }
+            .emit(&mut buf, &info, &mut state);
+        nops(&mut buf, &info, &mut state, 10);
+        buf.bind_label(label(1), state.ctrl_plane_mut());
+
+        let buf = buf.finish(&constants, state.ctrl_plane_mut());
+        assert_eq!(buf.total_size(), 16);
+        assert_eq!(buf.data()[0], 0x0f);
+        assert_eq!(buf.data()[1], 0x85);
+    }
+}

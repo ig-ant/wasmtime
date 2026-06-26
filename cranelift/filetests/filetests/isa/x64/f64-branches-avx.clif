@@ -38,14 +38,14 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   vucomiss %xmm1, %xmm0
-;   jp 0x14
-;   je 0x1e
-; block2: ; offset 0x14
+;   jp 0xc
+;   je 0x16
+; block2: ; offset 0xc
 ;   movl $2, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x1e
+; block3: ; offset 0x16
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -88,14 +88,14 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   vucomisd %xmm1, %xmm0
-;   jp 0x14
-;   je 0x1e
-; block2: ; offset 0x14
+;   jp 0xc
+;   je 0x16
+; block2: ; offset 0xc
 ;   movl $2, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x1e
+; block3: ; offset 0x16
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp

@@ -214,6 +214,7 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::mem;
 use core::ops::Range;
+use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use cranelift_control::ControlPlane;
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl};
 use smallvec::SmallVec;
@@ -356,6 +357,24 @@ pub struct MachBuffer<I: VCodeInst> {
     /// Indicates when a patchable region is currently open, to guard that it's
     /// not possible to nest patchable regions.
     open_patchable: bool,
+    /// Whether the post-emit branch-relaxation pass should run. Defaults to
+    /// `true`; an embedder can opt out via [`MachBuffer::set_branch_relax`].
+    /// Backends that do not define any relaxable [`MachInstLabelUse`] kind
+    /// pay only a single linear scan over the fixup list either way.
+    relax_enabled: bool,
+    /// Set once [`MachBuffer::relax_branches`] has run. Guards the
+    /// idempotent call from `finish()` for callers (e.g. `VCode::emit`)
+    /// that invoke it explicitly so they can shift their own
+    /// pre-relaxation offset tables via [`MachBuffer::relax_shift`].
+    relax_done: bool,
+    /// Sorted original `inst_end` offsets of every relaxed branch, paired
+    /// with `relax_cum_saved` to give the post-relaxation shift for an
+    /// arbitrary pre-relaxation offset. Empty if no branch was shortened.
+    relax_inst_ends: Vec<CodeOffset>,
+    /// `relax_cum_saved[k]` is the total bytes removed by the first `k`
+    /// shortened branches in `relax_inst_ends` order. Length is
+    /// `relax_inst_ends.len() + 1`.
+    relax_cum_saved: Vec<CodeOffset>,
     /// Stack frame layout metadata. If provided for a MachBuffer
     /// containing a function body, this allows interpretation of
     /// runtime state given a view of an active stack frame.
@@ -443,6 +462,19 @@ pub struct MachBufferFinalized<T: CompilePhase> {
 const UNKNOWN_LABEL_OFFSET: CodeOffset = 0xffff_ffff;
 const UNKNOWN_LABEL: MachLabel = MachLabel(0xffff_ffff);
 
+/// Process-global branch-relaxation statistics. Read by embedders that
+/// want to report aggregate code-size savings; not load-bearing for
+/// codegen.
+pub static RELAX_STATS_FUNCS: AtomicU64 = AtomicU64::new(0);
+/// See [`RELAX_STATS_FUNCS`].
+pub static RELAX_STATS_SHORTENED: AtomicU64 = AtomicU64::new(0);
+/// See [`RELAX_STATS_FUNCS`].
+pub static RELAX_STATS_BYTES_SAVED: AtomicU64 = AtomicU64::new(0);
+/// See [`RELAX_STATS_FUNCS`].
+pub static RELAX_STATS_PASSES_SUM: AtomicU64 = AtomicU64::new(0);
+/// See [`RELAX_STATS_FUNCS`].
+pub static RELAX_STATS_PASSES_MAX: AtomicU64 = AtomicU64::new(0);
+
 /// Threshold on max length of `labels_at_this_branch` list to avoid
 /// unbounded quadratic behavior (see comment below at use-site).
 const LABEL_LIST_THRESHOLD: usize = 100;
@@ -529,6 +561,10 @@ impl<I: VCodeInst> MachBuffer<I> {
             constants: Default::default(),
             used_constants: Default::default(),
             open_patchable: false,
+            relax_enabled: true,
+            relax_done: false,
+            relax_inst_ends: Vec::new(),
+            relax_cum_saved: Vec::new(),
             frame_layout: None,
         }
     }
@@ -536,6 +572,29 @@ impl<I: VCodeInst> MachBuffer<I> {
     /// Current offset from start of buffer.
     pub fn cur_offset(&self) -> CodeOffset {
         self.data.len() as CodeOffset
+    }
+
+    /// Enable or disable the post-emit branch-relaxation pass. See
+    /// [`MachBuffer::relax_branches`].
+    pub fn set_branch_relax(&mut self, enabled: bool) {
+        self.relax_enabled = enabled;
+    }
+
+    /// Map a pre-relaxation code offset to its post-relaxation offset.
+    ///
+    /// Callers that record offsets during emission (e.g. `VCode::emit`'s
+    /// per-block and per-instruction offset tables) and then invoke
+    /// [`MachBuffer::relax_branches`] explicitly must run every recorded
+    /// offset through this to account for the bytes removed by shortened
+    /// branches. Returns `off` unchanged if relaxation removed nothing.
+    /// `off` must lie on an instruction boundary in the original stream
+    /// (never strictly inside a shortened branch).
+    pub fn relax_shift(&self, off: CodeOffset) -> CodeOffset {
+        if self.relax_inst_ends.is_empty() {
+            return off;
+        }
+        let idx = self.relax_inst_ends.partition_point(|&e| e <= off);
+        off - self.relax_cum_saved[idx]
     }
 
     /// Add a byte.
@@ -1600,6 +1659,368 @@ impl<I: VCodeInst> MachBuffer<I> {
         self.use_label_at_offset(veneer_fixup_off, label, veneer_label_use);
     }
 
+    /// Post-emit branch relaxation: rewrite every long-form branch whose
+    /// target is reachable by the corresponding short encoding, sliding the
+    /// rest of the buffer down and shifting every offset-bearing side table
+    /// in lockstep.
+    ///
+    /// This is the inverse of the veneer/island machinery (which *grows*
+    /// short branches that cannot reach). Here we emit every relaxable
+    /// branch in its long form, then iterate to a fixed point shrinking
+    /// those that fit. Shrinking is monotone — every shrink can only bring
+    /// other branch/target pairs closer together — so the fixed point is
+    /// guaranteed to converge, and once a site is marked short it never
+    /// needs to be unmarked (proof sketch in the per-direction analysis
+    /// below). In practice convergence takes 2–4 passes on real functions.
+    ///
+    /// Runs after all block labels are bound but before constants and trap
+    /// stubs are appended (their labels are still `UNKNOWN_LABEL_OFFSET`, so
+    /// branches to them are simply left long). All fixups are still
+    /// unpatched at this point on every backend that defines a relaxable
+    /// `LabelUse` kind: x64's only relaxable kinds have rel32 reach, so no
+    /// island has been emitted and every fixup is still in
+    /// `pending_fixup_records`. We nevertheless drain `fixup_records` for
+    /// generality.
+    ///
+    /// Idempotent: callers that record their own offsets during emission
+    /// (notably `VCode::emit`) invoke this explicitly so they can run
+    /// those offsets through [`MachBuffer::relax_shift`] before
+    /// [`MachBuffer::finish`]; `finish` also calls it for direct users of
+    /// the buffer, and the second call is a no-op.
+    pub fn relax_branches(&mut self) {
+        if self.relax_done || !self.relax_enabled {
+            self.relax_done = true;
+            return;
+        }
+        self.relax_done = true;
+        // Drain the heap into the linear pending list so we can iterate and
+        // mutate fixups by index.
+        while let Some(f) = self.fixup_records.pop() {
+            self.pending_fixup_records.push(f);
+        }
+
+        // Collect relaxable sites. A site is the *instruction* span
+        // `[inst_start, inst_start + long_len)`; the fixup's `offset` points
+        // `long_prefix` bytes into that span (at the displacement field).
+        struct Site<L: MachInstLabelUse> {
+            fixup_idx: u32,
+            inst_start: CodeOffset,
+            target: CodeOffset,
+            long_prefix: u8,
+            long_len: u8,
+            short_prefix: u8,
+            short_len: u8,
+            short_kind: L,
+            rewrite: fn(&[u8], &mut [u8]),
+            is_short: bool,
+        }
+        let mut sites: Vec<Site<I::LabelUse>> = Vec::new();
+        for (i, f) in self.pending_fixup_records.iter().enumerate() {
+            let Some(ri) = f.kind.relax_info() else {
+                continue;
+            };
+            let target = self.resolve_label_offset(f.label);
+            if target == UNKNOWN_LABEL_OFFSET {
+                // Constant or trap label — laid out after this pass; never
+                // relaxable (and on x64, always forward by the whole
+                // function body, so rel8 would essentially never reach
+                // anyway).
+                continue;
+            }
+            let long_disp = f.kind.patch_size();
+            let short_disp = ri.short_kind.patch_size();
+            let long_len = u32::from(ri.long_prefix) + long_disp;
+            let short_len = u32::from(ri.short_prefix) + short_disp;
+            debug_assert!(short_len < long_len);
+            debug_assert!(f.offset >= u32::from(ri.long_prefix));
+            sites.push(Site {
+                fixup_idx: i as u32,
+                inst_start: f.offset - u32::from(ri.long_prefix),
+                target,
+                long_prefix: ri.long_prefix,
+                long_len: long_len as u8,
+                short_prefix: ri.short_prefix,
+                short_len: short_len as u8,
+                short_kind: ri.short_kind,
+                rewrite: ri.rewrite_prefix,
+                is_short: false,
+            });
+        }
+        if sites.is_empty() {
+            return;
+        }
+        sites.sort_by_key(|s| s.inst_start);
+        // Relaxable instructions are atomic: no two may overlap.
+        debug_assert!(
+            sites
+                .windows(2)
+                .all(|w| w[0].inst_start + u32::from(w[0].long_len) <= w[1].inst_start)
+        );
+
+        // `inst_end_orig[i]` is the original end of site `i`'s long form.
+        // Together with the cumulative-saved prefix sum it gives `shift(P)`
+        // — the number of bytes removed strictly before original offset `P`
+        // — as `cum[partition_point(end <= P)]`. Rebuilt every fixed-point
+        // pass from the current `is_short` decisions.
+        let inst_ends: Vec<CodeOffset> = sites
+            .iter()
+            .map(|s| s.inst_start + u32::from(s.long_len))
+            .collect();
+        let mut cum: Vec<CodeOffset> = vec![0; sites.len() + 1];
+
+        let mut passes: u32 = 0;
+        loop {
+            passes += 1;
+            // Rebuild cumulative shrinkage under the current decisions.
+            let mut acc = 0u32;
+            for (i, s) in sites.iter().enumerate() {
+                cum[i] = acc;
+                if s.is_short {
+                    acc += u32::from(s.long_len - s.short_len);
+                }
+            }
+            cum[sites.len()] = acc;
+            let shift = |p: CodeOffset| -> CodeOffset {
+                let idx = inst_ends.partition_point(|&e| e <= p);
+                cum[idx]
+            };
+
+            let mut changed = false;
+            for i in 0..sites.len() {
+                if sites[i].is_short {
+                    continue;
+                }
+                let s = &sites[i];
+                let saved = u32::from(s.long_len - s.short_len);
+                // `new_inst_start` does not depend on this site's own
+                // decision (its own contribution to `shift` only kicks in
+                // for offsets >= its `inst_end`, which is strictly greater
+                // than `inst_start`).
+                let new_inst_start = s.inst_start - shift(s.inst_start);
+                // Compute the displacement that *would* be encoded in the
+                // short form, i.e. assuming this site flips to short. For a
+                // forward branch (target past this instruction's end), the
+                // flip pulls the target closer by `saved`, but it also moves
+                // the instruction's own end closer by exactly `saved`, so
+                // the net displacement is unchanged from the long form's.
+                // For a backward branch the target is unaffected and the
+                // instruction's end moves closer by `saved`, so |disp|
+                // shrinks by `saved`. Either way, applying `saved` to the
+                // target only when it lies past `inst_end` and using
+                // `short_len` for the end offset gives the exact short-form
+                // displacement.
+                let inst_end_orig = inst_ends[i];
+                let mut tgt_shift = shift(s.target);
+                if s.target >= inst_end_orig {
+                    tgt_shift += saved;
+                }
+                let new_target = s.target - tgt_shift;
+                let new_inst_end_short = new_inst_start + u32::from(s.short_len);
+                let disp = new_target as i64 - new_inst_end_short as i64;
+                // Reachability is in terms of the short kind's range,
+                // re-expressed relative to the displacement *field* offset
+                // (one byte before the instruction end, for a 1-byte disp).
+                let pc_rel = new_target as i64
+                    - (new_inst_start as i64 + i64::from(s.short_prefix));
+                if pc_rel <= s.short_kind.max_pos_range() as i64
+                    && pc_rel >= -(s.short_kind.max_neg_range() as i64)
+                {
+                    // Monotonicity: for forward branches `disp` is
+                    // non-negative and non-increasing across passes (more
+                    // shrinkage between branch and target only reduces it,
+                    // and total shrinkage between two points is bounded by
+                    // the original distance, so it never goes negative).
+                    // For backward branches `disp` is negative and
+                    // non-decreasing. So once in range, always in range.
+                    debug_assert!(disp >= -128 && disp <= 127);
+                    sites[i].is_short = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        // Final shrinkage prefix sum, persisted so `relax_shift` can map
+        // arbitrary caller-side offsets after this returns. We keep only
+        // the *shortened* sites' inst_ends here — non-shortened sites
+        // contribute zero to the sum and including them would just slow
+        // down the binary search.
+        let mut acc = 0u32;
+        debug_assert!(self.relax_inst_ends.is_empty());
+        for (i, s) in sites.iter().enumerate() {
+            if s.is_short {
+                self.relax_inst_ends.push(inst_ends[i]);
+                self.relax_cum_saved.push(acc);
+                acc += u32::from(s.long_len - s.short_len);
+            }
+        }
+        self.relax_cum_saved.push(acc);
+        let total_saved = acc;
+        if total_saved == 0 {
+            self.relax_inst_ends.clear();
+            self.relax_cum_saved.clear();
+            return;
+        }
+        let relax_inst_ends = &self.relax_inst_ends;
+        let relax_cum_saved = &self.relax_cum_saved;
+        let shift = |p: CodeOffset| -> CodeOffset {
+            let idx = relax_inst_ends.partition_point(|&e| e <= p);
+            relax_cum_saved[idx]
+        };
+
+        #[cfg(feature = "trace-log")]
+        {
+            let n_short = sites.iter().filter(|s| s.is_short).count();
+            crate::trace!(
+                "relax_branches: {} sites, {} shortened, {} passes, {} bytes saved",
+                sites.len(),
+                n_short,
+                passes,
+                total_saved
+            );
+        }
+        RELAX_STATS_PASSES_MAX.fetch_max(passes as u64, Relaxed);
+        RELAX_STATS_PASSES_SUM.fetch_add(passes as u64, Relaxed);
+        RELAX_STATS_FUNCS.fetch_add(1, Relaxed);
+        RELAX_STATS_SHORTENED.fetch_add(
+            sites.iter().filter(|s| s.is_short).count() as u64,
+            Relaxed,
+        );
+        RELAX_STATS_BYTES_SAVED.fetch_add(total_saved as u64, Relaxed);
+        let _ = passes;
+
+        // Rewrite the byte buffer. We compact in place: `w` is the write
+        // cursor, `r` the read cursor; between shortened sites we
+        // `copy_within` the untouched span, and at each shortened site we
+        // synthesise the short-form opcode prefix from the long-form bytes
+        // (so condition-code inversions applied by branch optimisation are
+        // honoured) followed by a zeroed displacement that the normal fixup
+        // path will patch later.
+        let old_len = self.data.len();
+        let mut r: usize = 0;
+        let mut w: usize = 0;
+        for s in &sites {
+            if !s.is_short {
+                continue;
+            }
+            let start = s.inst_start as usize;
+            let lp = usize::from(s.long_prefix);
+            let sp = usize::from(s.short_prefix);
+            let sd = usize::from(s.short_len) - sp;
+            // Copy the untouched span [r, start) down to w.
+            let span = start - r;
+            if span > 0 && w != r {
+                self.data.copy_within(r..start, w);
+            }
+            w += span;
+            // Build the short opcode prefix from the long one. We must read
+            // the long prefix from its *original* position (at `start`),
+            // which is still intact because `w <= r <= start` and the
+            // copy_within above wrote into `[w, w+span) = [w, start - (r-w))`
+            // which ends before `start`.
+            let mut short_prefix_buf = [0u8; 4];
+            (s.rewrite)(
+                &self.data[start..start + lp],
+                &mut short_prefix_buf[..sp],
+            );
+            self.data[w..w + sp].copy_from_slice(&short_prefix_buf[..sp]);
+            // Zero the short displacement; `handle_fixup` will patch it.
+            for b in &mut self.data[w + sp..w + sp + sd] {
+                *b = 0;
+            }
+            w += usize::from(s.short_len);
+            r = start + usize::from(s.long_len);
+        }
+        // Tail.
+        if r < old_len {
+            let span = old_len - r;
+            if w != r {
+                self.data.copy_within(r..old_len, w);
+            }
+            w += span;
+        }
+        debug_assert_eq!(w as u32 + total_saved, old_len as u32);
+        self.data.truncate(w);
+
+        // Shift every label offset.
+        for off in self.label_offsets.iter_mut() {
+            if *off != UNKNOWN_LABEL_OFFSET {
+                debug_assert!(*off <= old_len as u32);
+                *off -= shift(*off);
+            }
+        }
+
+        // Shift every fixup. Relaxed sites additionally swap to the short
+        // kind and have their offset re-pointed at the short displacement
+        // byte (`new_inst_start + short_prefix`). Non-relaxable and
+        // still-long fixups just slide by `shift(offset)`.
+        let mut short_for_fixup: Vec<Option<(u8, I::LabelUse)>> =
+            vec![None; self.pending_fixup_records.len()];
+        for s in &sites {
+            if s.is_short {
+                short_for_fixup[s.fixup_idx as usize] = Some((s.short_prefix, s.short_kind));
+            }
+        }
+        for (i, f) in self.pending_fixup_records.iter_mut().enumerate() {
+            if let Some((sp, sk)) = short_for_fixup[i] {
+                // Recover original inst_start from the (still-original)
+                // fixup offset, then shift.
+                let ri = f.kind.relax_info().unwrap();
+                let inst_start = f.offset - u32::from(ri.long_prefix);
+                let new_inst_start = inst_start - shift(inst_start);
+                f.offset = new_inst_start + u32::from(sp);
+                f.kind = sk;
+            } else {
+                f.offset -= shift(f.offset);
+            }
+        }
+
+        // Shift every offset-bearing side table. None of these can point
+        // strictly inside a relaxable branch instruction (relocs/traps/
+        // call-sites/stack-maps/unwind/debug-tags are all recorded at
+        // instruction boundaries, and srcloc ranges span whole
+        // instructions), so `shift` is well-defined for every entry.
+        for r in self.relocs.iter_mut() {
+            r.offset -= shift(r.offset);
+        }
+        for t in self.traps.iter_mut() {
+            t.offset -= shift(t.offset);
+        }
+        for c in self.call_sites.iter_mut() {
+            c.ret_addr -= shift(c.ret_addr);
+        }
+        for c in self.patchable_call_sites.iter_mut() {
+            c.ret_addr -= shift(c.ret_addr);
+        }
+        for s in self.srclocs.iter_mut() {
+            s.start -= shift(s.start);
+            s.end -= shift(s.end);
+        }
+        for (off, _, _) in self.user_stack_maps.iter_mut() {
+            *off -= shift(*off);
+        }
+        for (off, _) in self.unwind_info.iter_mut() {
+            *off -= shift(*off);
+        }
+        for d in self.debug_tags.iter_mut() {
+            d.offset -= shift(d.offset);
+        }
+
+        // The tail-tracking machinery is conceptually dead once `finish()`
+        // has begun, but constants/traps are appended via the same
+        // `bind_label` path which consults it, so keep it consistent: any
+        // labels that were at the old tail are (after the shift above) at
+        // the new tail.
+        self.labels_at_tail_off = self.data.len() as CodeOffset;
+        self.latest_branches.clear();
+        // Deadlines were computed against rel32 reach during emission and
+        // are meaningless now; every relaxed fixup's label is bound, so
+        // `handle_fixup` will patch directly without consulting deadlines.
+        self.pending_fixup_deadline = u32::MAX;
+    }
+
     fn finish_emission_maybe_forcing_veneers(
         &mut self,
         force_veneers: ForceVeneers,
@@ -1630,6 +2051,8 @@ impl<I: VCodeInst> MachBuffer<I> {
         ctrl_plane: &mut ControlPlane,
     ) -> MachBufferFinalized<Stencil> {
         let _tt = timing::vcode_emit_finish();
+
+        self.relax_branches();
 
         self.finish_emission_maybe_forcing_veneers(ForceVeneers::No, ctrl_plane);
 

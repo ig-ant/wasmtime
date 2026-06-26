@@ -71,7 +71,8 @@ pub use crate::entity::packed_option;
 pub use crate::machinst::buffer::{
     ExceptionContextLoc, FinalizedMachCallSite, FinalizedMachExceptionHandler, FinalizedMachReloc,
     FinalizedRelocTarget, MachCallSite, MachSrcLoc, MachTextSectionBuilder, MachTrap,
-    OpenPatchRegion, PatchRegion,
+    OpenPatchRegion, PatchRegion, RELAX_STATS_BYTES_SAVED, RELAX_STATS_FUNCS,
+    RELAX_STATS_PASSES_MAX, RELAX_STATS_PASSES_SUM, RELAX_STATS_SHORTENED,
 };
 pub use crate::machinst::{
     CallInfo, CompiledCode, Final, FrameLayout, MachBuffer, MachBufferDebugTagList,

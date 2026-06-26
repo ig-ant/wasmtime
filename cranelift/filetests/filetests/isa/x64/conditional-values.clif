@@ -64,13 +64,13 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   testb %dil, %dil
-;   jne 0x17
-; block2: ; offset 0xd
+;   jne 0x13
+; block2: ; offset 0x9
 ;   movl $2, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x17
+; block3: ; offset 0x13
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -110,13 +110,13 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   testb %dil, %dil
-;   jne 0x17
-; block2: ; offset 0xd
+;   jne 0x13
+; block2: ; offset 0x9
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x17
+; block3: ; offset 0x13
 ;   movl $2, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -161,13 +161,13 @@ block2:
 ; block1: ; offset 0x4
 ;   movl (%rdi), %esi ; trap: heap_oob
 ;   cmpl $1, %esi
-;   je 0x19
-; block2: ; offset 0xf
+;   je 0x15
+; block2: ; offset 0xb
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x19
+; block3: ; offset 0x15
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -191,8 +191,7 @@ block2:
 ;   pushq %rbp
 ;   movq %rsp, %rbp
 ; block0:
-;   movl (%rdi), %esi
-;   cmpl $0x1, %esi
+;   cmpl $0x1, (%rdi)
 ;   jz      label2; j label1
 ; block1:
 ;   movl $0x1, %eax
@@ -210,15 +209,14 @@ block2:
 ;   pushq %rbp
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
-;   movl (%rdi), %esi ; trap: heap_oob
-;   cmpl $1, %esi
-;   je 0x19
-; block2: ; offset 0xf
+;   cmpl $1, (%rdi) ; trap: heap_oob
+;   je 0x13
+; block2: ; offset 0x9
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x19
+; block3: ; offset 0x13
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp

@@ -81,9 +81,9 @@ block0(v0: f64, v1: i64):
 ;   movzbq %r10b, %rax
 ;   ucomisd %xmm1, %xmm0
 ;   movdqa %xmm0, %xmm1
-;   jnp 0x2c
+;   jnp 0x28
 ;   movaps %xmm1, %xmm0
-;   je 0x35
+;   je 0x2d
 ;   movaps %xmm1, %xmm0
 ;   movq %rbp, %rsp
 ;   popq %rbp

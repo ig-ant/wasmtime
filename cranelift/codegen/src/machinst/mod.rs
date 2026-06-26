@@ -470,6 +470,47 @@ pub trait MachInstLabelUse: Clone + Copy + Debug + Eq {
     /// This returns `None` if the relocation doesn't have a corresponding
     /// representation for the target architecture.
     fn from_reloc(reloc: Reloc, addend: Addend) -> Option<Self>;
+
+    /// If this label-use marks a branch instruction that has a strictly
+    /// shorter encoding when the target is sufficiently close, return a
+    /// descriptor of the relaxation. The branch is emitted in its long form
+    /// and the [`MachBuffer`] runs a post-emit fixed-point shrink pass that
+    /// rewrites every in-range site to the short form, sliding the rest of
+    /// the buffer down and adjusting all offset-bearing side tables.
+    ///
+    /// This is the inverse of the veneer mechanism: veneers grow short-range
+    /// references that cannot reach their target; relaxation shrinks
+    /// long-range references that could have used a short form. Shrinking is
+    /// monotone (every shrink can only bring other branch/target pairs
+    /// closer) so the fixed-point pass is guaranteed to converge.
+    ///
+    /// Returning `None` (the default) opts the kind out of relaxation
+    /// entirely; an ISA with no relaxable kinds pays zero cost.
+    fn relax_info(self) -> Option<MachLabelUseRelax<Self>> {
+        None
+    }
+}
+
+/// Descriptor for a relaxable branch encoding; see
+/// [`MachInstLabelUse::relax_info`].
+#[derive(Clone, Copy, Debug)]
+pub struct MachLabelUseRelax<L: MachInstLabelUse> {
+    /// Number of opcode bytes preceding the displacement field in the long
+    /// encoding. The fixup's `offset` (which points at the displacement)
+    /// minus this gives the instruction start.
+    pub long_prefix: u8,
+    /// Number of opcode bytes preceding the displacement field in the short
+    /// encoding.
+    pub short_prefix: u8,
+    /// The label-use kind for the short encoding. Its `patch_size()` gives
+    /// the short displacement width and its `max_pos_range`/`max_neg_range`
+    /// give the reachability bounds that gate the relaxation.
+    pub short_kind: L,
+    /// Rewrite the opcode prefix from long to short form. `long` has length
+    /// `long_prefix` and is read from the emitted buffer at relax time (so
+    /// any in-place edits made by branch optimization — e.g. condition-code
+    /// inversion — are honored). `short` has length `short_prefix`.
+    pub rewrite_prefix: fn(long: &[u8], short: &mut [u8]),
 }
 
 /// Classification of call instruction types for granular analysis.

@@ -369,6 +369,10 @@ fn test_x64_emit() {
         let actual_printing = insn.pretty_print_inst(&mut Default::default());
         assert_eq!(expected_printing, actual_printing.trim());
         let mut buffer = MachBuffer::new();
+        // These tests check the long-form instruction encoding directly;
+        // branch relaxation is exercised separately by the
+        // `machinst::buffer` tests and the filetest suite.
+        buffer.set_branch_relax(false);
 
         insn.emit(&mut buffer, &emit_info, &mut Default::default());
 

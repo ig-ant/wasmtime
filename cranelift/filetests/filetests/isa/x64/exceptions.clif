@@ -211,32 +211,32 @@ function %f1(i32) -> i32, f32, f64 {
 ;   movq %r15, 0x30(%rsp)
 ; block1: ; offset 0x21
 ;   testl %edi, %edi
-;   jne 0x60
-; block2: ; offset 0x29
+;   jne 0x52
+; block2: ; offset 0x25
 ;   movl $0x2a, %eax
 ;   movl $0x4591a000, %ecx
 ;   movd %ecx, %xmm0
 ;   movabsq $0x40d59e0000000000, %rcx
 ;   movq %rcx, %xmm1
 ;   testl %edi, %edi
-;   je 0x56
-; block3: ; offset 0x4e
+;   je 0x4b
+; block3: ; offset 0x46
 ;   movq %rax, %rcx
-;   jmp 0xb9
-; block4: ; offset 0x56
+;   jmp 0xa5
+; block4: ; offset 0x4b
 ;   movdqu %xmm1, (%rsp)
-;   jmp 0x8d
-; block5: ; offset 0x60
+;   jmp 0x79
+; block5: ; offset 0x52
 ;   movabsq $0x3ff0000000000000, %rax
 ;   movq %rax, %xmm1
 ;   movdqu %xmm1, (%rsp)
 ;   movabsq $0, %rax ; reloc_external Abs8 %g 0
 ;   callq *%rax
-;   jmp 0x8d
-; block6: ; offset 0x85
+;   jmp 0x79
+; block6: ; offset 0x74
 ;   movq %rax, %rcx
-;   jmp 0xb9
-; block7: ; offset 0x8d
+;   jmp 0xa5
+; block7: ; offset 0x79
 ;   movl $1, %eax
 ;   movdqu (%rsp), %xmm1
 ;   movq 0x10(%rsp), %rbx
@@ -248,7 +248,7 @@ function %f1(i32) -> i32, f32, f64 {
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block8: ; offset 0xb9
+; block8: ; offset 0xa5
 ;   leal 1(%rcx), %eax
 ;   xorps %xmm0, %xmm0
 ;   movq %rcx, %xmm1
@@ -502,16 +502,16 @@ function %f4(i64, i32) -> i32, f32, f64 {
 ;   movq %rsi, %rdi
 ;   movq %rsi, (%rsp)
 ;   callq *%rax
-;   jmp 0x6f
-; block2: ; offset 0x53
+;   jmp 0x66
+; block2: ; offset 0x50
 ;   movq %rax, %rdi
 ;   movdqu 0x10(%rsp), %xmm1
-;   jmp 0xa7
-; block3: ; offset 0x61
+;   jmp 0x9e
+; block3: ; offset 0x5b
 ;   movq %rax, %rdi
 ;   movdqu 0x10(%rsp), %xmm1
-;   jmp 0xa7
-; block4: ; offset 0x6f
+;   jmp 0x9e
+; block4: ; offset 0x66
 ;   movl $1, %eax
 ;   movdqu 0x10(%rsp), %xmm1
 ;   movq 0x20(%rsp), %rbx
@@ -523,10 +523,10 @@ function %f4(i64, i32) -> i32, f32, f64 {
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block5: ; offset 0x9c
+; block5: ; offset 0x93
 ;   movdqu 0x10(%rsp), %xmm1
 ;   movq 8(%rsp), %rdi
-; block6: ; offset 0xa7
+; block6: ; offset 0x9e
 ;   leal 1(%rdi), %eax
 ;   xorps %xmm0, %xmm0
 ;   movq 0x20(%rsp), %rbx

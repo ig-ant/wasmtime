@@ -175,7 +175,7 @@ mod tests {
 
         assert_eq!(
             format!("{fde:?}"),
-            "FrameDescriptionEntry { address: Constant(4321), length: 22, lsda: None, instructions: [(1, CfaOffset(16)), (1, Offset(Register(6), -16)), (4, CfaRegister(Register(6)))] }"
+            "FrameDescriptionEntry { address: Constant(4321), length: 18, lsda: None, instructions: [(1, CfaOffset(16)), (1, Offset(Register(6), -16)), (4, CfaRegister(Register(6)))] }"
         );
     }
 

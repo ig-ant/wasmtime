@@ -271,8 +271,8 @@ block0(v0: f64, v1: f64):
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   ucomisd %xmm1, %xmm0
-;   jp 0x14
-;   je 0x19
+;   jp 0x10
+;   je 0x15
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
@@ -393,8 +393,8 @@ block0(v0: f64, v1: f64):
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   ucomisd %xmm1, %xmm0
-;   jp 0x14
-;   je 0x19
+;   jp 0x10
+;   je 0x15
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq

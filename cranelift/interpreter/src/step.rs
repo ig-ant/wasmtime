@@ -1297,6 +1297,12 @@ where
         Opcode::GetFramePointer => unimplemented!("GetFramePointer"),
         Opcode::GetStackPointer => unimplemented!("GetStackPointer"),
         Opcode::GetReturnAddress => unimplemented!("GetReturnAddress"),
+        Opcode::GetAotCsr0
+        | Opcode::SetAotCsr0
+        | Opcode::GetAotCsr1
+        | Opcode::SetAotCsr1
+        | Opcode::GetAotCsr2
+        | Opcode::SetAotCsr2 => unimplemented!("AotCsr"),
         Opcode::X86Pshufb => unimplemented!("X86Pshufb"),
         Opcode::Blendv => unimplemented!("Blendv"),
         Opcode::X86Pmulhrsw => unimplemented!("X86Pmulhrsw"),

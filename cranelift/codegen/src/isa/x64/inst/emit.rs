@@ -32,7 +32,11 @@ fn emit_signed_cvt(
 fn one_way_jmp(sink: &mut MachBuffer<Inst>, cc: CC, label: MachLabel) {
     let cond_start = sink.cur_offset();
     let cond_disp_off = cond_start + 2;
-    sink.use_label_at_offset(cond_disp_off, label, LabelUse::JmpRel32);
+    // `JccRel32` patches identically to `JmpRel32` but additionally records
+    // that the two preceding bytes are a `0F 8x` opcode, which lets the
+    // post-emit branch-relaxation pass shrink the instruction to its 2-byte
+    // `7x ib` form when the target is in rel8 range.
+    sink.use_label_at_offset(cond_disp_off, label, LabelUse::JccRel32);
     emit_jcc_no_offset(sink, cc);
     debug_assert_eq!(sink.cur_offset(), cond_disp_off + 4);
 }
@@ -44,7 +48,7 @@ fn cond_jmp(sink: &mut MachBuffer<Inst>, cc: CC, label: MachLabel) {
     let cond_disp_off = cond_start + 2;
     let cond_end = cond_start + 6;
 
-    sink.use_label_at_offset(cond_disp_off, label, LabelUse::JmpRel32);
+    sink.use_label_at_offset(cond_disp_off, label, LabelUse::JccRel32);
     // FIXME: ideally this `inverted` calculation would go through the external
     // assembler, but for now it's left done manually.
     let inverted: [u8; 6] = [0x0F, 0x80 + (cc.invert().get_enc()), 0x00, 0x00, 0x00, 0x00];
@@ -90,7 +94,7 @@ fn uncond_jmp(sink: &mut MachBuffer<Inst>, label: MachLabel) {
     let uncond_disp_off = uncond_start + 1;
     let uncond_end = uncond_start + 5;
 
-    sink.use_label_at_offset(uncond_disp_off, label, LabelUse::JmpRel32);
+    sink.use_label_at_offset(uncond_disp_off, label, LabelUse::JmpUncondRel32);
     sink.add_uncond_branch(uncond_start, uncond_end, label);
 
     asm::inst::jmp_d32::new(0).encode(&mut external::AsmCodeSink {

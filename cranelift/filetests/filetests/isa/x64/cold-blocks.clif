@@ -37,13 +37,13 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   testl %edi, %edi
-;   je 0x14
-; block2: ; offset 0xc
+;   je 0xd
+; block2: ; offset 0x8
 ;   movq %rdi, %rax
-;   jmp 0x19
-; block3: ; offset 0x14
+;   jmp 0x12
+; block3: ; offset 0xd
 ;   movl $0x61, %eax
-; block4: ; offset 0x19
+; block4: ; offset 0x12
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
@@ -83,14 +83,14 @@ block2 cold:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   testl %edi, %edi
-;   je 0x14
-; block2: ; offset 0xc
+;   je 0x10
+; block2: ; offset 0x8
 ;   movq %rdi, %rax
-; block3: ; offset 0xf
+; block3: ; offset 0xb
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block4: ; offset 0x14
+; block4: ; offset 0x10
 ;   movl $0x61, %eax
-;   jmp 0xf
+;   jmp 0xb
 

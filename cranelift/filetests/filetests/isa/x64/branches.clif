@@ -38,13 +38,13 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   cmpl %esi, %edi
-;   je 0x16
-; block2: ; offset 0xc
+;   je 0x12
+; block2: ; offset 0x8
 ;   movl $2, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x16
+; block3: ; offset 0x12
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -87,13 +87,13 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   cmpl %esi, %edi
-;   je 0x16
-; block2: ; offset 0xc
+;   je 0x12
+; block2: ; offset 0x8
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x16
+; block3: ; offset 0x12
 ;   movl $2, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -136,13 +136,13 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   cmpl %esi, %edi
-;   je 0x16
-; block2: ; offset 0xc
+;   je 0x12
+; block2: ; offset 0x8
 ;   movl $2, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x16
+; block3: ; offset 0x12
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -185,14 +185,14 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   ucomiss %xmm1, %xmm0
-;   jp 0x13
-;   je 0x1d
-; block2: ; offset 0x13
+;   jp 0xb
+;   je 0x15
+; block2: ; offset 0xb
 ;   movl $2, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x1d
+; block3: ; offset 0x15
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -234,14 +234,14 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   ucomiss %xmm1, %xmm0
-;   jp 0x13
-;   je 0x1d
-; block2: ; offset 0x13
+;   jp 0xb
+;   je 0x15
+; block2: ; offset 0xb
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x1d
+; block3: ; offset 0x15
 ;   xorl %eax, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -283,14 +283,14 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   ucomiss %xmm1, %xmm0
-;   jp 0x1d
-;   jne 0x1d
-; block2: ; offset 0x13
+;   jp 0x15
+;   jne 0x15
+; block2: ; offset 0xb
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x1d
+; block3: ; offset 0x15
 ;   xorl %eax, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -349,20 +349,16 @@ block2:
 ;   movslq (%rcx, %rdi, 4), %rax
 ;   addq %rax, %rcx
 ;   jmpq *%rcx
-;   sbbb %al, (%rax)
-;   addb %al, (%rax)
-;   adcl %eax, (%rax)
-;   addb %al, (%rax)
-;   sbbb %al, (%rax)
+;   adcl $0xe000000, %eax
 ;   addb %al, (%rax)
 ; block2: ; offset 0x32
-;   jmp 0x3e
-; block3: ; offset 0x37
+;   jmp 0x3b
+; block3: ; offset 0x34
 ;   xorl %eax, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block4: ; offset 0x3e
+; block4: ; offset 0x3b
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -405,13 +401,13 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   testq %rdi, %rdi
-;   jl 0x14
-; block2: ; offset 0xd
+;   jl 0x10
+; block2: ; offset 0x9
 ;   xorl %eax, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x14
+; block3: ; offset 0x10
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -454,13 +450,13 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   testl %edi, %edi
-;   jl 0x13
-; block2: ; offset 0xc
+;   jl 0xf
+; block2: ; offset 0x8
 ;   xorl %eax, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x13
+; block3: ; offset 0xf
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -503,13 +499,13 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   testq %rdi, %rdi
-;   je 0x14
-; block2: ; offset 0xd
+;   je 0x10
+; block2: ; offset 0x9
 ;   xorl %eax, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x14
+; block3: ; offset 0x10
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -552,13 +548,13 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   testl %edi, %edi
-;   je 0x13
-; block2: ; offset 0xc
+;   je 0xf
+; block2: ; offset 0x8
 ;   xorl %eax, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x13
+; block3: ; offset 0xf
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -601,13 +597,13 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   testq %rdi, %rdi
-;   jg 0x14
-; block2: ; offset 0xd
+;   jg 0x10
+; block2: ; offset 0x9
 ;   xorl %eax, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x14
+; block3: ; offset 0x10
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -656,16 +652,20 @@ block202:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   ucomiss 0x25(%rip), %xmm0
-;   jp 0x17
-;   je 0x24
-; block2: ; offset 0x17
-;   ucomiss 0x22(%rip), %xmm0
-;   jnp 0x29
-; block3: ; offset 0x24
+;   jp 0xf
+;   je 0x1c
+; block2: ; offset 0xf
+;   ucomiss 0x2a(%rip), %xmm0
+;   jnp 0x21
+; block3: ; offset 0x1c
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
 ;   ud2 ; trap: heap_oob
+;   addb %al, (%rax)
+;   addb %al, (%rax)
+;   addb %al, (%rax)
+;   addb %al, (%rax)
 ;   addb %al, (%rax)
 ;   addb %al, (%rax)
 ;   addb %al, (%rax)
@@ -723,13 +723,13 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   cmpl %esi, %edi
-;   je 0x16
-; block2: ; offset 0xc
+;   je 0x12
+; block2: ; offset 0x8
 ;   movl $2, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x16
+; block3: ; offset 0x12
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -773,14 +773,14 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   ucomiss %xmm1, %xmm0
-;   jp 0x13
-;   je 0x1d
-; block2: ; offset 0x13
+;   jp 0xb
+;   je 0x15
+; block2: ; offset 0xb
 ;   movl $2, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x1d
+; block3: ; offset 0x15
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -824,13 +824,13 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   cmpl %esi, %edi
-;   je 0x16
-; block2: ; offset 0xc
+;   je 0x12
+; block2: ; offset 0x8
 ;   movl $2, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x16
+; block3: ; offset 0x12
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -874,14 +874,14 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   ucomiss %xmm1, %xmm0
-;   jp 0x13
-;   je 0x1d
-; block2: ; offset 0x13
+;   jp 0xb
+;   je 0x15
+; block2: ; offset 0xb
 ;   movl $2, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x1d
+; block3: ; offset 0x15
 ;   movl $1, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -1002,20 +1002,29 @@ block5(v5: i32):
 ;   movslq (%rcx, %r10, 4), %rax
 ;   addq %rax, %rcx
 ;   jmpq *%rcx
+;   addb %al, %es:(%rax)
+;   addb %bl, (%rsi)
+;   addb %al, (%rax)
+;   addb %bl, (%rsi)
+;   addb %al, (%rax)
+;   addb %dl, (%rsi)
+;   addb %al, (%rax)
+;   addb %ch, (%rsi)
+;   addb %al, (%rax)
 ; block2: ; offset 0x38
-;   jmp 0x48
-; block3: ; offset 0x3d
+;   jmp 0x42
+; block3: ; offset 0x3a
 ;   movl $3, %r9d
-;   jmp 0x64
-; block4: ; offset 0x48
+;   jmp 0x58
+; block4: ; offset 0x42
 ;   movl $2, %r9d
-;   jmp 0x64
-; block5: ; offset 0x53
+;   jmp 0x58
+; block5: ; offset 0x4a
 ;   movl $1, %r9d
-;   jmp 0x64
-; block6: ; offset 0x5e
+;   jmp 0x58
+; block6: ; offset 0x52
 ;   movl $4, %r9d
-; block7: ; offset 0x64
+; block7: ; offset 0x58
 ;   leal (%rdi, %r9), %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -1082,30 +1091,20 @@ block1(v5: i32):
 ;   movslq (%rdi, %r9, 4), %rsi
 ;   addq %rsi, %rdi
 ;   jmpq *%rdi
-;   sbbl %eax, (%rax)
-;   addb %al, (%rax)
-;   andl %eax, (%rax)
-;   addb %al, (%rax)
-;   subl %eax, (%rax)
-;   addb %al, (%rax)
-;   xorl %eax, (%rax)
-;   addb %al, (%rax)
-;   xorb $0, %al
-;   addb %al, (%rax)
 ; block2: ; offset 0x4d
-;   jmp 0x6d
-; block3: ; offset 0x52
+;   jmp 0x61
+; block3: ; offset 0x4f
 ;   movq %r11, %rax
-;   jmp 0x6d
-; block4: ; offset 0x5a
+;   jmp 0x61
+; block4: ; offset 0x54
 ;   movq %rdx, %rax
-;   jmp 0x6d
-; block5: ; offset 0x62
+;   jmp 0x61
+; block5: ; offset 0x59
 ;   movq %rdx, %rax
-;   jmp 0x6d
-; block6: ; offset 0x6a
+;   jmp 0x61
+; block6: ; offset 0x5e
 ;   movq %rcx, %rax
-; block7: ; offset 0x6d
+; block7: ; offset 0x61
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
@@ -1147,18 +1146,17 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   testl %edi, %esi
-;   jne 0x16
-; block2: ; offset 0xc
+;   jne 0x12
+; block2: ; offset 0x8
 ;   movl $0xc8, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x16
+; block3: ; offset 0x12
 ;   movl $0x64, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-
 
 function %br_and_immediate(i32) -> i32 {
 block0(v0: i32):
@@ -1199,18 +1197,17 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   testl $0x12c, %edi
-;   jne 0x1a
-; block2: ; offset 0x10
+;   jne 0x16
+; block2: ; offset 0xc
 ;   movl $0xc8, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x1a
+; block3: ; offset 0x16
 ;   movl $0x64, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-
 
 function %test_bit5(i32) -> i32 {
 block0(v0: i32):
@@ -1251,18 +1248,17 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   testl $0x20, %edi
-;   jne 0x1a
-; block2: ; offset 0x10
+;   jne 0x16
+; block2: ; offset 0xc
 ;   movl $0xc8, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x1a
+; block3: ; offset 0x16
 ;   movl $0x64, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-
 
 function %test_bit29(i32) -> i32 {
 block0(v0: i32):
@@ -1303,18 +1299,17 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   testl $0x20000000, %edi
-;   jne 0x1a
-; block2: ; offset 0x10
+;   jne 0x16
+; block2: ; offset 0xc
 ;   movl $0xc8, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x1a
+; block3: ; offset 0x16
 ;   movl $0x64, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-
 
 function %test_bit32(i64) -> i32 {
 block0(v0: i64):
@@ -1355,18 +1350,17 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   btq $0x20, %rdi
-;   jb 0x19
-; block2: ; offset 0xf
+;   jb 0x15
+; block2: ; offset 0xb
 ;   movl $0xc8, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x19
+; block3: ; offset 0x15
 ;   movl $0x64, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-
 
 function %test_bit55(i64) -> i32 {
 block0(v0: i64):
@@ -1407,13 +1401,13 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   btq $0x37, %rdi
-;   jb 0x19
-; block2: ; offset 0xf
+;   jb 0x15
+; block2: ; offset 0xb
 ;   movl $0xc8, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x19
+; block3: ; offset 0x15
 ;   movl $0x64, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -1459,18 +1453,17 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   btl %esi, %edi
-;   jb 0x17
-; block2: ; offset 0xd
+;   jb 0x13
+; block2: ; offset 0x9
 ;   movl $0xc8, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x17
+; block3: ; offset 0x13
 ;   movl $0x64, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-
 
 function %test_variable_bit64(i64, i64) -> i32 {
 block0(v0: i64, v1: i64):
@@ -1512,13 +1505,13 @@ block2:
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
 ;   btq %rsi, %rdi
-;   jb 0x18
-; block2: ; offset 0xe
+;   jb 0x14
+; block2: ; offset 0xa
 ;   movl $0xc8, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq
-; block3: ; offset 0x18
+; block3: ; offset 0x14
 ;   movl $0x64, %eax
 ;   movq %rbp, %rsp
 ;   popq %rbp

@@ -1630,6 +1630,25 @@ pub enum LabelUse {
     /// next instruction (so the size of the payload -- 4 bytes -- is subtracted from the payload).
     JmpRel32,
 
+    /// Identical reach and patch behaviour to [`LabelUse::JmpRel32`], but
+    /// additionally carries the fact that the preceding two bytes are a
+    /// `0F 8x` long-form conditional jump. This lets the post-emit branch
+    /// relaxation pass rewrite the instruction to the 2-byte `7x ib` short
+    /// form when the displacement fits in rel8.
+    JccRel32,
+
+    /// Identical reach and patch behaviour to [`LabelUse::JmpRel32`], but
+    /// additionally carries the fact that the preceding byte is the `E9`
+    /// unconditional-jump opcode. Relaxable to the 2-byte `EB ib` short
+    /// form when the displacement fits in rel8.
+    JmpUncondRel32,
+
+    /// An 8-bit signed offset from the end of the instruction. Only ever
+    /// produced by the branch-relaxation pass as the short form of a
+    /// `JccRel32` / `JmpUncondRel32` site; never registered directly by
+    /// emit.
+    JmpRel8,
+
     /// A 32-bit offset from location of relocation itself, added to the existing value at that
     /// location.
     PCRel32,
@@ -1640,19 +1659,34 @@ impl MachInstLabelUse for LabelUse {
 
     fn max_pos_range(self) -> CodeOffset {
         match self {
-            LabelUse::JmpRel32 | LabelUse::PCRel32 => 0x7fff_ffff,
+            LabelUse::JmpRel32
+            | LabelUse::JccRel32
+            | LabelUse::JmpUncondRel32
+            | LabelUse::PCRel32 => 0x7fff_ffff,
+            // rel8 is signed [-128,127] from end-of-instruction; the fixup
+            // offset is at the disp byte (one byte before end), so
+            // `label - use_offset` ranges over [-127, 128].
+            LabelUse::JmpRel8 => 128,
         }
     }
 
     fn max_neg_range(self) -> CodeOffset {
         match self {
-            LabelUse::JmpRel32 | LabelUse::PCRel32 => 0x8000_0000,
+            LabelUse::JmpRel32
+            | LabelUse::JccRel32
+            | LabelUse::JmpUncondRel32
+            | LabelUse::PCRel32 => 0x8000_0000,
+            LabelUse::JmpRel8 => 127,
         }
     }
 
     fn patch_size(self) -> CodeOffset {
         match self {
-            LabelUse::JmpRel32 | LabelUse::PCRel32 => 4,
+            LabelUse::JmpRel32
+            | LabelUse::JccRel32
+            | LabelUse::JmpUncondRel32
+            | LabelUse::PCRel32 => 4,
+            LabelUse::JmpRel8 => 1,
         }
     }
 
@@ -1662,7 +1696,7 @@ impl MachInstLabelUse for LabelUse {
         debug_assert!(pc_rel >= -(self.max_neg_range() as i64));
         let pc_rel = pc_rel as u32;
         match self {
-            LabelUse::JmpRel32 => {
+            LabelUse::JmpRel32 | LabelUse::JccRel32 | LabelUse::JmpUncondRel32 => {
                 let addend = u32::from_le_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]);
                 let value = pc_rel.wrapping_add(addend).wrapping_sub(4);
                 buffer.copy_from_slice(&value.to_le_bytes()[..]);
@@ -1672,19 +1706,19 @@ impl MachInstLabelUse for LabelUse {
                 let value = pc_rel.wrapping_add(addend);
                 buffer.copy_from_slice(&value.to_le_bytes()[..]);
             }
+            LabelUse::JmpRel8 => {
+                debug_assert_eq!(buffer.len(), 1);
+                buffer[0] = pc_rel.wrapping_sub(1) as u8;
+            }
         }
     }
 
     fn supports_veneer(self) -> bool {
-        match self {
-            LabelUse::JmpRel32 | LabelUse::PCRel32 => false,
-        }
+        false
     }
 
     fn veneer_size(self) -> CodeOffset {
-        match self {
-            LabelUse::JmpRel32 | LabelUse::PCRel32 => 0,
-        }
+        0
     }
 
     fn worst_case_veneer_size() -> CodeOffset {
@@ -1692,17 +1726,41 @@ impl MachInstLabelUse for LabelUse {
     }
 
     fn generate_veneer(self, _: &mut [u8], _: CodeOffset) -> (CodeOffset, LabelUse) {
-        match self {
-            LabelUse::JmpRel32 | LabelUse::PCRel32 => {
-                panic!("Veneer not supported for JumpRel32 label-use.");
-            }
-        }
+        panic!("x64 does not support veneers.");
     }
 
     fn from_reloc(reloc: Reloc, addend: Addend) -> Option<Self> {
         match (reloc, addend) {
             (Reloc::X86CallPCRel4, -4) => Some(LabelUse::JmpRel32),
             _ => None,
+        }
+    }
+
+    fn relax_info(self) -> Option<MachLabelUseRelax<Self>> {
+        match self {
+            // 0F 8x id  →  7x ib   (saves 4 bytes)
+            LabelUse::JccRel32 => Some(MachLabelUseRelax {
+                long_prefix: 2,
+                short_prefix: 1,
+                short_kind: LabelUse::JmpRel8,
+                rewrite_prefix: |long, short| {
+                    debug_assert_eq!(long[0], 0x0f);
+                    debug_assert_eq!(long[1] & 0xf0, 0x80);
+                    short[0] = 0x70 | (long[1] & 0x0f);
+                },
+            }),
+            // E9 id  →  EB ib   (saves 3 bytes)
+            LabelUse::JmpUncondRel32 => Some(MachLabelUseRelax {
+                long_prefix: 1,
+                short_prefix: 1,
+                short_kind: LabelUse::JmpRel8,
+                rewrite_prefix: |long, short| {
+                    debug_assert_eq!(long[0], 0xe9);
+                    let _ = long;
+                    short[0] = 0xeb;
+                },
+            }),
+            LabelUse::JmpRel32 | LabelUse::PCRel32 | LabelUse::JmpRel8 => None,
         }
     }
 }

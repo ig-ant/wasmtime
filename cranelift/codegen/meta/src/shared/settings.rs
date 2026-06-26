@@ -166,6 +166,27 @@ pub(crate) fn define() -> SettingGroup {
         false,
     );
 
+    settings.add_bool(
+        "enable_branch_relax",
+        "Run the post-emit branch-relaxation pass.",
+        r#"
+            After emission, iterate to a fixed point shrinking every branch
+            whose target is reachable by a shorter encoding (e.g. x64 rel32
+            jcc/jmp to their rel8 forms), sliding the rest of the buffer down
+            and adjusting all offset-bearing side tables in lockstep.
+
+            This is the inverse of the veneer/island machinery (which grows
+            short branches that cannot reach). Shrinking is monotone — every
+            shrink can only bring other branch/target pairs closer together —
+            so convergence is guaranteed; in practice 2–4 passes per function.
+
+            Currently only the x64 backend defines relaxable label-use kinds,
+            so on other targets this is effectively a no-op (one linear scan
+            over the fixup list).
+        "#,
+        true,
+    );
+
     settings.add_enum(
         "tls_model",
         "Defines the model used to perform TLS accesses.",

@@ -746,6 +746,7 @@ impl<I: VCodeInst> VCode<I> {
         let _tt = timing::vcode_emit();
         let mut buffer = MachBuffer::new();
         buffer.set_log2_min_function_alignment(self.log2_min_function_alignment);
+        buffer.set_branch_relax(flags.enable_branch_relax());
         let mut bb_starts: Vec<Option<CodeOffset>> = vec![];
 
         // The first M MachLabels are reserved for block indices.
@@ -1221,6 +1222,25 @@ impl<I: VCodeInst> VCode<I> {
 
         // emission state is not needed anymore, move control plane back out
         *ctrl_plane = state.take_ctrl_plane();
+
+        // Run branch relaxation now (rather than leaving it to `finish()`)
+        // so that the per-block and per-instruction offset tables we
+        // recorded during emission can be shifted to their post-relaxation
+        // positions before they are consumed below. `finish()`'s own call
+        // is then a no-op.
+        buffer.relax_branches();
+        if flags.machine_code_cfg_info() {
+            for off in bb_starts.iter_mut().flatten() {
+                *off = buffer.relax_shift(*off);
+            }
+        }
+        if !self.debug_value_labels.is_empty() {
+            for off in inst_offsets.iter_mut() {
+                if *off != NO_INST_OFFSET {
+                    *off = buffer.relax_shift(*off);
+                }
+            }
+        }
 
         let func_body_len = buffer.cur_offset();
 

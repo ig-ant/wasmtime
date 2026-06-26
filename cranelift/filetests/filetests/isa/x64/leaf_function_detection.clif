@@ -85,13 +85,13 @@ block3(v6: i32):
 ; block1: ; offset 0x4
 ;   xorl %eax, %eax
 ;   testl %edi, %edi
-;   jg 0x15
-; block2: ; offset 0xe
+;   jg 0xe
+; block2: ; offset 0xa
 ;   subl %edi, %eax
-;   jmp 0x18
-; block3: ; offset 0x15
+;   jmp 0x11
+; block3: ; offset 0xe
 ;   imull $2, %edi, %eax
-; block4: ; offset 0x18
+; block4: ; offset 0x11
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq

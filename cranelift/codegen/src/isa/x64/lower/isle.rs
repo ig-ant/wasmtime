@@ -382,6 +382,58 @@ impl Context for IsleContext<'_, '_, MInst, X64Backend> {
         OperandSize::from_ty(ty)
     }
 
+    fn is_mergeable_overflow_flag(
+        &mut self,
+        val: Value,
+    ) -> Option<(CC, generated_code::ProduceFlagsOp, Type, Value, Value, Inst)> {
+        use crate::ir::ValueDef;
+        use generated_code::ProduceFlagsOp;
+        let dfg = self.lower_ctx.dfg();
+        // Must be result-1 (the carry/overflow flag) of a two-result op.
+        let src_inst = match dfg.value_def(val) {
+            ValueDef::Result(inst, 1) => inst,
+            _ => return None,
+        };
+        let (cc, op) = match dfg.insts[src_inst].opcode() {
+            Opcode::SaddOverflow => (CC::O, ProduceFlagsOp::Add),
+            Opcode::SsubOverflow => (CC::O, ProduceFlagsOp::Sub),
+            Opcode::UaddOverflow => (CC::B, ProduceFlagsOp::Add),
+            Opcode::UsubOverflow => (CC::B, ProduceFlagsOp::Sub),
+            // `*mul_overflow` lower through a different ProducesFlags
+            // helper; not handled here yet.
+            _ => return None,
+        };
+        let ty = dfg.value_type(dfg.inst_results(src_inst)[0]);
+        if ty.bits() > 64 {
+            return None;
+        }
+        let args = dfg.inst_args(src_inst);
+        let (x, y) = (dfg.resolve_aliases(args[0]), dfg.resolve_aliases(args[1]));
+        // Safety gate for `merge_root_inst`: the overflow op must be the
+        // immediate layout predecessor of the consumer (so re-emitting it
+        // here cannot reorder it past a same-block use of either result),
+        // and the flag must be consumed by exactly this instruction (so
+        // leaving result-1 undefined is sound). The lowered-use-count
+        // check is belt-and-braces: a single-IR-use value should never
+        // have a lowered use yet at this point, but if it somehow did
+        // (e.g. via a block-call arg lowered earlier) we bail rather than
+        // leave that consumer reading an undefined vreg.
+        if !self.lower_ctx.is_immediately_preceding_cur_inst(src_inst) {
+            return None;
+        }
+        if !self.lower_ctx.value_has_single_ir_use(val)
+            || self.lower_ctx.value_lowered_use_count(val) != 0
+        {
+            return None;
+        }
+        Some((cc, op, ty, x, y, src_inst))
+    }
+
+    fn merge_overflow_root(&mut self, src_inst: Inst, sum: Reg) {
+        self.lower_ctx
+            .merge_root_inst(src_inst, &[Some(sum), None]);
+    }
+
     fn put_in_reg_mem_imm(&mut self, val: Value) -> RegMemImm {
         if let Some(imm) = self.i64_from_iconst(val) {
             if let Ok(imm) = i32::try_from(imm) {

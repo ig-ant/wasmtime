@@ -1785,14 +1785,16 @@
 
 (decl x64_movzx (ExtMode GprMem) Gpr)
 (rule (x64_movzx (ExtMode.BL) src) (x64_movzbl_rm (gpr_mem_as_gpr_mem_8  src)))
-(rule (x64_movzx (ExtMode.BQ) src) (x64_movzbq_rm (gpr_mem_as_gpr_mem_8  src)))
-(rule (x64_movzx (ExtMode.WL) src) (x64_movzwl_rm (gpr_mem_as_gpr_mem_16 src)))
-(rule (x64_movzx (ExtMode.WQ) src) (x64_movzwq_rm (gpr_mem_as_gpr_mem_16 src)))
 ;; This instruction selection may seem strange but is correct in 64-bit mode:
 ;; section 3.4.1.1 of the Intel manual says that "32-bit operands generate a
 ;; 32-bit result, zero-extended to a 64-bit result in the destination
-;; general-purpose register." This is applicable beyond `mov` but we use this
-;; fact to zero-extend `src` into `dst`.
+;; general-purpose register." So `movzbl`/`movzwl` already clear bits 63:32
+;; of the destination — there is no need for the `movzbq`/`movzwq` forms,
+;; which differ only by a REX.W prefix byte. Same reasoning applies to the
+;; `LQ → movl` rule below.
+(rule (x64_movzx (ExtMode.BQ) src) (x64_movzbl_rm (gpr_mem_as_gpr_mem_8  src)))
+(rule (x64_movzx (ExtMode.WL) src) (x64_movzwl_rm (gpr_mem_as_gpr_mem_16 src)))
+(rule (x64_movzx (ExtMode.WQ) src) (x64_movzwl_rm (gpr_mem_as_gpr_mem_16 src)))
 (rule (x64_movzx (ExtMode.LQ) src) (x64_movl_rm (gpr_mem_as_gpr_mem_32 src)))
 
 (decl x64_movsx (ExtMode GprMem) Gpr)
@@ -3933,7 +3935,40 @@
 (rule 1 (is_nonzero_cmp (icmp _ cc a b)) (emit_cmp cc a b))
 (rule 1 (is_nonzero_cmp (uextend _ (fcmp _ cc a b))) (emit_fcmp cc a b))
 (rule 1 (is_nonzero_cmp (uextend _ (icmp _ cc a b))) (emit_cmp cc a b))
+
+;; `brif (sadd_overflow x y).1` and friends: re-emit the add/sub at the
+;; consumer's position and branch directly on the resulting OF/CF instead
+;; of materialising the flag (`seto r; test r,r; jcc`). The producer's
+;; sum result is exposed via `merge_overflow_root` so other consumers
+;; (typically in the not-taken successor) read it through a vreg alias.
+;; Note ADD/SUB do not macro-fuse with JO/JNO on Golden Cove, so the win
+;; is one fused-domain µop (no setcc, no test) + ~5 B, plus the branch
+;; resolves two cycles earlier.
+;;
+;; The extractor enforces that the `*_overflow` immediately precedes the
+;; consumer in layout (so re-emitting it here cannot move it past a
+;; same-block use of the sum) and that the flag result has no other
+;; lowered use. See `Lower::merge_root_inst`.
+(rule 2 (is_nonzero_cmp (is_mergeable_overflow_flag cc op ty x y src_inst))
+      (let ((producer ProducesFlags (x64_produce_flags op ty x y))
+            (sum Reg (produces_flags_get_reg producer))
+            (_ Unit (merge_overflow_root src_inst sum)))
+        (CondResult.CC (produces_flags_ignore producer) cc)))
+
 (rule 0 (is_nonzero_cmp val) (is_nonzero val))
+
+;; Extracts (cc, alu-op, result-0 type, x, y, defining-Inst) when `val` is
+;; the second result (the overflow/carry flag) of a 8/16/32/64-bit
+;; `[us](add|sub)_overflow` that immediately precedes the current scan
+;; instruction and whose flag result is not consumed elsewhere.
+(decl is_mergeable_overflow_flag (CC ProduceFlagsOp Type Value Value Inst) Value)
+(extern extractor is_mergeable_overflow_flag is_mergeable_overflow_flag)
+
+;; Suppresses the standalone lowering of `src_inst` and aliases its
+;; result-0 to `sum`. Result-1 (the flag) is left undefined; the
+;; extractor above guarantees nobody reads it.
+(decl merge_overflow_root (Inst Reg) Unit)
+(extern constructor merge_overflow_root merge_overflow_root)
 
 (decl is_nonzero_band (Type Value Value) CondResult)
 (rule 0 (is_nonzero_band ty a b) (CondResult.CC (x64_test ty a b) (CC.NZ)))

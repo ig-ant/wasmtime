@@ -204,6 +204,13 @@ pub struct Lower<'func, I: VCodeInst> {
     /// their original locations.
     inst_sunk: FxHashSet<Inst>,
 
+    /// Pure multi-result root instructions whose results were defined by
+    /// a consumer's lowering via [`Lower::merge_root_inst`]. Skipped at
+    /// their original locations like `inst_sunk`, but — because every
+    /// result has a vreg alias — `put_value_in_regs` on those results
+    /// remains valid (and isn't asserted against).
+    inst_merged: FxHashSet<Inst>,
+
     /// Instructions collected for the CLIF inst in progress, in forward order.
     ir_insts: Vec<I>,
 
@@ -504,6 +511,7 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
             value_ir_uses,
             value_lowered_uses: SecondaryMap::default(),
             inst_sunk: FxHashSet::default(),
+            inst_merged: FxHashSet::default(),
             cur_scan_entry_color: None,
             cur_inst: None,
             ir_insts: vec![],
@@ -748,6 +756,12 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
             let has_side_effect = has_lowering_side_effect(self.f, inst);
             // If  inst has been sunk to another location, skip it.
             if self.is_inst_sunk(inst) {
+                continue;
+            }
+            // Likewise skip pure multi-result roots that were merged
+            // into a consumer's lowering; their result vregs are
+            // already aliased.
+            if self.inst_merged.contains(&inst) {
                 continue;
             }
             // Are any outputs used at least once?
@@ -1676,6 +1690,68 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
     pub fn emit(&mut self, mach_inst: I) {
         trace!("emit: {:?}", mach_inst);
         self.ir_insts.push(mach_inst);
+    }
+
+    /// Indicate that a pure multi-result root instruction has been merged
+    /// into the current consumer's lowering and should not be lowered at
+    /// its own position. The consumer has emitted MInsts that define
+    /// result `i` of `ir_inst` into `result_regs[i]` (or `None` if that
+    /// result is dead); this records the vreg aliases so other consumers
+    /// — which under back-to-front lowering have either already run (in
+    /// later blocks) or have yet to run (earlier in this block) — pick up
+    /// the merged definitions transparently.
+    ///
+    /// Unlike [`Lower::sink_inst`] this is for pure roots (no side-effect
+    /// colour bookkeeping) and tolerates already-lowered uses of the
+    /// results in successor blocks. It does NOT tolerate uses of the
+    /// results by instructions strictly between `ir_inst` and the current
+    /// scan position in the same block — back-to-front lowering would
+    /// reach those next, call `put_value_in_regs`, and trip the
+    /// `inst_sunk` assert. Callers gate on layout adjacency (see x64
+    /// `is_mergeable_overflow_flag`) to guarantee no such intervening use
+    /// exists.
+    pub fn merge_root_inst(&mut self, ir_inst: Inst, result_regs: &[Option<Reg>]) {
+        debug_assert!(!has_lowering_side_effect(self.f, ir_inst));
+        debug_assert!(is_value_use_root(self.f, ir_inst));
+        let results = self.f.dfg.inst_results(ir_inst);
+        debug_assert_eq!(results.len(), result_regs.len());
+        for (&result, &temp) in results.iter().zip(result_regs) {
+            if let Some(temp) = temp {
+                let dst = self.value_regs[result].only_reg().unwrap();
+                self.vregs.set_vreg_alias(dst, temp);
+            } else {
+                // Caller asserts this result is dead. Verify nobody in an
+                // already-lowered block consumed it.
+                debug_assert_eq!(self.value_lowered_uses[result], 0);
+            }
+        }
+        self.inst_merged.insert(ir_inst);
+    }
+
+    /// Test whether `producer` immediately precedes the current scan
+    /// instruction in layout order, with no other instruction between
+    /// them. Combined with `value_lowered_uses[result_n] == 0` for any
+    /// result the caller intends to leave undefined, this is the safety
+    /// gate for [`Lower::merge_root_inst`].
+    pub fn is_immediately_preceding_cur_inst(&self, producer: Inst) -> bool {
+        match self.cur_inst {
+            Some(cur) => self.f.layout.next_inst(producer) == Some(cur),
+            None => false,
+        }
+    }
+
+    /// How many already-lowered MInsts consume `val`. Zero means no
+    /// consumer (in any block processed so far) has called
+    /// `put_value_in_regs` on it.
+    pub fn value_lowered_use_count(&self, val: Value) -> u32 {
+        self.value_lowered_uses[val]
+    }
+
+    /// Whether `val` has exactly one use anywhere in the function. This
+    /// is the IR-level use count (precomputed before lowering), not the
+    /// lowered-use count.
+    pub fn value_has_single_ir_use(&self, val: Value) -> bool {
+        self.value_ir_uses[val] == ValueUseState::Once
     }
 
     /// Indicate that the side-effect of an instruction has been sunk to the

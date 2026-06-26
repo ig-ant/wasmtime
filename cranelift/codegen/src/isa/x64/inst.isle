@@ -3893,6 +3893,20 @@
 (rule (is_nonzero val @ (value_type (is_single_register_gpr_type ty)))
   (let ((gpr Gpr val)) (CondResult.CC (x64_test ty gpr gpr) (CC.NZ))))
 
+;; If the value being tested is itself a sinkable load, fold it into a
+;; `cmp [m],$0`. The base case above forces the value into a Gpr (the
+;; existing `x64_test r,r` form has no mem operand on the LHS), so a
+;; `brif(load)` lowers as `mov rN,[m]; test rN,rN; jcc`. With this rule
+;; it is `cmpl/q $0,[m]; jcc` — −1i, −2..3 B. On Golden-Cove `cmp m,imm`
+;; does not macro-fuse with the jcc (mem+imm operand combo), so the
+;; fused-domain µop count is unchanged; the win is decode bandwidth and
+;; i-cache footprint only. The `_sxb` (83 /7 ib) form is the shortest
+;; encoding for a 0 immediate.
+(rule 3 (is_nonzero (and (value_type $I32) (sinkable_load_32 sl)))
+  (CondResult.CC (x64_cmpl_mi_sxb sl 0) (CC.NZ)))
+(rule 3 (is_nonzero (and (value_type $I64) (sinkable_load_64 sl)))
+  (CondResult.CC (x64_cmpq_mi_sxb sl 0) (CC.NZ)))
+
 ;; Base case: i128
 (rule 1 (is_nonzero val @ (value_type $I128))
       (let ((lo Gpr (value_regs_get_gpr val 0))
@@ -3947,6 +3961,18 @@
 ;; [1]: https://github.com/bytecodealliance/wasmtime/pull/11128#discussion_r2164888415
 (rule 2 (is_nonzero_band ty a b @ (i32_from_iconst _))
   (CondResult.CC (x64_test ty a b) (CC.NZ)))
+
+;; If the `a` operand is itself a sinkable load and `b` is an immediate,
+;; fold the load into the `test` (`test [m],imm; jcc`). Without this rule
+;; the load is forced through a Gpr (`x64_test`'s src1 is `Gpr`) even
+;; though `x64_test{l,q}_mi` accept a memory operand. Like `cmp m,imm`
+;; (see `is_nonzero` above) this does not macro-fuse with the jcc on
+;; recent Intel cores, so the win is i-cache / decode only. Covers wasm
+;; `i32.and + i32.eqz + br_if` when the and's input comes from a load.
+(rule 3 (is_nonzero_band $I32 (sinkable_load_32 sl) (simm32_from_value (is_imm32 imm)))
+  (CondResult.CC (x64_testl_mi sl imm) (CC.NZ)))
+(rule 3 (is_nonzero_band $I64 (sinkable_load_64 sl) (simm32_from_value (is_simm32 imm)))
+  (CondResult.CC (x64_testq_mi sl imm) (CC.NZ)))
 
 ;; Helper to test whether the `u64` input has a single bit set, and if so
 ;; yields the bit position of where that bit is set. Used in the lowering of
@@ -4012,6 +4038,21 @@
 (rule 6 (emit_cmp (IntCC.Equal) (u64_from_iconst 0) a) (cond_invert (is_nonzero a)))
 (rule 5 (emit_cmp (IntCC.NotEqual) a (u64_from_iconst 0)) (is_nonzero a))
 (rule 6 (emit_cmp (IntCC.NotEqual) (u64_from_iconst 0) a) (is_nonzero a))
+
+;; If the LHS is a sinkable load and the RHS is an immediate, fold the
+;; load into `cmp [m],imm`. The base rule 0 forces `a` into a Gpr
+;; (`x64_cmp`'s src1 is `Gpr`), and rule 1 (the constant-on-LHS swap)
+;; doesn't fire when `a` is a load, so without this rule a
+;; `brif(icmp(load.iN, K))` lowers as `mov rN,[m]; cmp rN,K; jcc`. The
+;; `_sxb` form is preferred when the immediate fits in i8.
+(rule 8 (emit_cmp cc (and (value_type $I32) (sinkable_load_32 sl)) (simm32_from_value (is_simm8 imm)))
+  (CondResult.CC (x64_cmpl_mi_sxb sl imm) cc))
+(rule 8 (emit_cmp cc (and (value_type $I64) (sinkable_load_64 sl)) (simm32_from_value (is_simm8 imm)))
+  (CondResult.CC (x64_cmpq_mi_sxb sl imm) cc))
+(rule 7 (emit_cmp cc (and (value_type $I32) (sinkable_load_32 sl)) (simm32_from_value (is_imm32 imm)))
+  (CondResult.CC (x64_cmpl_mi sl imm) cc))
+(rule 7 (emit_cmp cc (and (value_type $I64) (sinkable_load_64 sl)) (simm32_from_value (is_simm32 imm)))
+  (CondResult.CC (x64_cmpq_mi sl imm) cc))
 
 ; Recursion: at most one to eliminate "or equal" cases.
 (decl rec emit_cmp_i128 (CC Gpr Gpr Gpr Gpr) CondResult)

@@ -733,8 +733,31 @@ impl ABIMachineSpec for X64ABIMachineSpec {
 
         // Store each clobbered register in order at offsets from RSP,
         // placing them above the fixed frame slots.
+        //
+        // Under `enable_aot_body_frame` (signalled by a non-zero
+        // `aot_frame_head_size` — set only on JS bodies, never on
+        // stubs/thunks) the SAME physical slots are addressed via a
+        // negative displacement off RBP instead of a positive one off
+        // RSP. Frame layout is unchanged — only the addressing base
+        // flips. The point is encoding density: ~83 % of bodies have
+        // `fixed_frame_storage ≥ 0x80`, forcing the rsp-relative form
+        // to disp32 (8 B per store) on every save; from rbp the clobber
+        // area sits at `[−head − clobber, −head)`, and with the body
+        // emitter's `head = (ncl.max(2)+2)·8` any function with ≤14 JS
+        // locals fits every save in disp8. Larger frames fall back to
+        // disp32 — same size as the rsp form — so this is never a
+        // regression.
+        //
+        // Relocating the clobber area to the BOTTOM of the frame (below
+        // fixed storage, at `[rsp+0..]`) would give disp8 unconditionally
+        // but is architecturally blocked: the embedder's D3a
+        // `nf = body_rsp` invariant requires `stack_addr(slot0, 0) ==
+        // rsp` (the body→body call thunk derives the callee's cfr from
+        // it; see aot-clif `helpers.rs` invariant (2)), and any
+        // outgoing-args-adjacent insertion shifts that.
         let clobber_offset =
             frame_layout.fixed_frame_storage_size + frame_layout.outgoing_args_size;
+        let (clobber_base, clobber_disp) = clobber_addressing_base(frame_layout, clobber_offset);
         let mut cur_offset = 0;
         for reg in &frame_layout.clobbered_callee_saves {
             let r_reg = reg.to_reg();
@@ -752,7 +775,7 @@ impl ABIMachineSpec for X64ABIMachineSpec {
             insts.push(Inst::store(
                 ty,
                 r_reg.into(),
-                Amode::imm_reg(i32::try_from(off + clobber_offset).unwrap(), regs::rsp()),
+                Amode::imm_reg(clobber_disp + i32::try_from(off).unwrap(), clobber_base),
             ));
 
             if flags.unwind_info() {
@@ -775,11 +798,13 @@ impl ABIMachineSpec for X64ABIMachineSpec {
     ) -> SmallVec<[Self::I; 16]> {
         let mut insts = SmallVec::new();
 
-        // Restore regs by loading from offsets of RSP. We compute the offset from
-        // the same base as above in clobber_save, as RSP won't change between the
-        // prologue and epilogue.
-        let mut cur_offset =
+        // Restore regs by loading from offsets of RSP. RSP/RBP don't
+        // change between prologue and epilogue, so the same base+disp
+        // works. See `gen_clobber_save` for the rbp-relative rationale.
+        let clobber_offset =
             frame_layout.fixed_frame_storage_size + frame_layout.outgoing_args_size;
+        let (clobber_base, clobber_disp) = clobber_addressing_base(frame_layout, clobber_offset);
+        let mut cur_offset = 0;
         for reg in &frame_layout.clobbered_callee_saves {
             let rreg = reg.to_reg();
             let ty = match rreg.class() {
@@ -793,7 +818,7 @@ impl ABIMachineSpec for X64ABIMachineSpec {
 
             insts.push(Inst::load(
                 ty,
-                Amode::imm_reg(cur_offset.try_into().unwrap(), regs::rsp()),
+                Amode::imm_reg(clobber_disp + i32::try_from(cur_offset).unwrap(), clobber_base),
                 Writable::from_reg(rreg.into()),
                 ExtKind::None,
             ));
@@ -801,18 +826,14 @@ impl ABIMachineSpec for X64ABIMachineSpec {
             cur_offset += ty.bytes();
         }
 
-        let stack_size = frame_layout.fixed_frame_storage_size
-            + frame_layout.clobber_size
-            + frame_layout.aot_frame_head_size
-            + frame_layout.outgoing_args_size;
-
-        // Adjust RSP back upward.
-        if stack_size > 0 {
-            let rsp = Writable::from_reg(regs::rsp());
-            let stack_size = i32::try_from(stack_size)
-                .expect("`stack_size` is too large to fit in a 32-bit immediate");
-            insts.push(Inst::addq_mi(rsp, stack_size));
-        }
+        // No `add $stack_size, %rsp` here: both callers
+        // (`Callee::gen_epilogue` and `emit_return_call_common_sequence`)
+        // immediately follow with `gen_epilogue_frame_restore`, which on
+        // x64 unconditionally emits `mov %rbp, %rsp; pop %rbp`. The `mov`
+        // overwrites %rsp, so the explicit deallocate is dead — every
+        // function paid a 4–7 B `addq $K, %rsp` for nothing. The clobber
+        // restores above are %rsp-relative but %rsp hasn't moved since the
+        // prologue, so they remain correct.
 
         insts
     }
@@ -1040,6 +1061,22 @@ impl ABIMachineSpec for X64ABIMachineSpec {
             }
             _ => &[],
         }
+    }
+}
+
+/// Pick the addressing base for clobber-save slots. See the comment in
+/// `gen_clobber_save`. Returns `(base_reg, disp_to_clobber_area_start)`
+/// such that clobber slot `i` is at `[base_reg + disp + i*sz]`.
+fn clobber_addressing_base(frame_layout: &FrameLayout, rsp_clobber_offset: u32) -> (Reg, i32) {
+    if frame_layout.aot_frame_head_size > 0 {
+        // rbp − (head + clobber) == rsp + rsp_clobber_offset; both name
+        // the same byte (total = outgoing + fixed + clobber + head, and
+        // rbp = rsp + total).
+        let from_fp =
+            -i32::try_from(frame_layout.aot_frame_head_size + frame_layout.clobber_size).unwrap();
+        (regs::rbp(), from_fp)
+    } else {
+        (regs::rsp(), i32::try_from(rsp_clobber_offset).unwrap())
     }
 }
 

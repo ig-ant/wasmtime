@@ -35,6 +35,9 @@ impl From<StackAMode> for AMode {
             },
             StackAMode::Slot(off) => AMode::SlotOffset { off },
             StackAMode::OutgoingArg(off) => AMode::SPOffset { off },
+            StackAMode::AotFrameHead(_) => {
+                unimplemented!("aot_frame_head fixed spill slot: x64-only")
+            }
         }
     }
 }

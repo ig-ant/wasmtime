@@ -43,6 +43,18 @@ pub struct SSABuilder {
     /// SSA values that must be included in stack maps.
     stack_map_values: EntitySet<Value>,
 
+    /// `enable_aot_body_frame`: for each Variable, the frame-head
+    /// slot index (`[fp − slot×8]`) that regalloc2 should use as
+    /// its canonical spill location. `0` = no fixed slot (default).
+    /// See [`crate::FunctionBuilder::declare_var_in_frame_head`].
+    frame_head_vars: SecondaryMap<Variable, u32>,
+    /// `true` iff any Variable has a frame-head slot. Gates
+    /// `record_frame_head_binding`/`finalize_frame_head_bindings`
+    /// so the stock (feature-unused) path is zero-cost —
+    /// otherwise every `def_var` pays a SecondaryMap index and
+    /// `finalize` walks every Variable's per-block table.
+    any_frame_head_var: bool,
+
     /// Records the position of the basic blocks and the list of values used but not defined in the
     /// block.
     ssa_blocks: SecondaryMap<Block, SSABlockData>,
@@ -118,6 +130,8 @@ impl SSABuilder {
         self.variables.clear();
         self.stack_map_vars.clear();
         self.stack_map_values.clear();
+        self.frame_head_vars.clear();
+        self.any_frame_head_var = false;
         self.ssa_blocks.clear();
         self.variable_pool.clear();
         self.inst_pool.clear();
@@ -248,6 +262,118 @@ impl SSABuilder {
         }
     }
 
+    /// Bind `var`'s canonical spill location to the embedder's
+    /// frame-head local at `[fp − slot×8]`. Every block param the
+    /// SSA constructor inserts for `var` will be recorded in
+    /// `Function::aot_frame_head_spill` so regalloc2 spills it to
+    /// that home instead of a redundant `[sp + N]` slot. `slot > 0`
+    /// (slot 0 would be `[fp]` = the saved fp).
+    pub fn set_var_frame_head_slot(&mut self, var: Variable, slot: u32) {
+        debug_assert!(slot > 0);
+        self.frame_head_vars[var] = slot;
+        self.any_frame_head_var = true;
+    }
+
+    /// After all blocks are sealed, transfer every recorded
+    /// `(Variable, Block) → Value` binding for frame-head
+    /// Variables into `func.aot_frame_head_spill`. This is the
+    /// authoritative annotation set: it includes every block-
+    /// param the constructor kept AND every reaching def per
+    /// block, so a Variable whose block-params were all
+    /// trivially removed (defined once, never redefined — every
+    /// φ resolves to the sole def) still has its def Value
+    /// annotated. Called from `FunctionBuilder::finalize`.
+    ///
+    /// A Value shared across two Variables (e.g. an op_call
+    /// result bound to both `dst` and `this`, or the shared
+    /// entry-block seed constant) keeps the FIRST slot seen —
+    /// see `record_frame_head_binding` for the soundness
+    /// argument (regalloc2's per-fixed-slot overlap check falls
+    /// back to an auto slot if two live spillsets contend for
+    /// one home).
+    pub fn finalize_frame_head_bindings(&self, func: &mut Function) {
+        if !self.any_frame_head_var {
+            return;
+        }
+        for (var, per_block) in self.variables.iter() {
+            let slot = self.frame_head_vars[var];
+            if slot == 0 {
+                continue;
+            }
+            for val in per_block.values() {
+                if let Some(val) = val.expand() {
+                    // Same poison-on-conflict rule as
+                    // `record_frame_head_binding` — a Value in two
+                    // Variables' per-block tables (the shared seed,
+                    // or a call result bound to two locals) must
+                    // NOT get either fixed slot: regalloc's spill
+                    // to that slot would overwrite the OTHER
+                    // Variable's cfr home.
+                    use alloc::collections::btree_map::Entry;
+                    match func.stencil.aot_frame_head_spill.entry(val) {
+                        Entry::Vacant(e) => {
+                            e.insert(slot);
+                        }
+                        Entry::Occupied(mut e) => {
+                            if *e.get() != slot && *e.get() != 0 {
+                                *e.get_mut() = 0;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// If `var` has a frame-head fixed spill slot, record it on the
+    /// `Function` for `val`. Called for every fresh block param the
+    /// SSA constructor inserts (stable across egraph) AND for every
+    /// `def_var` value (may be egraph-rewritten later — the
+    /// annotation on a rewritten Value is dropped in lowering when
+    /// `value_regs[val]` is invalid, but in practice a Variable's
+    /// def is a per-op unique arith/load/call result that survives;
+    /// annotating both block-params and defs maximises the chance
+    /// that at least one VReg in each Variable's merge-coalesced
+    /// spillset carries the fixed slot).
+    ///
+    /// A single Value `def_var`'d into two Variables with
+    /// *different* fixed slots is POISONED (mapped to slot 0,
+    /// which lowering skips → auto-slot). Keep-first is UNSOUND:
+    /// the shared Value's spillset takes slot K, and regalloc's
+    /// spill of the shared value to `[fp − K×8]` OVERWRITES var_K's
+    /// real value if the shared value outlives var_K's redef (the
+    /// entry-block seed constant `def_var`'d into every Variable
+    /// is exactly this shape — gap-gbv-i32a SEGV under Approach B
+    /// where no per-cold-arm spill re-materialises cfr[K]).
+    /// regalloc2's per-fixed-slot overlap check backstops the
+    /// two-*distinct*-spillsets-one-slot case; poison here handles
+    /// one-Value-two-slots at annotation time.
+    pub(crate) fn record_frame_head_binding(
+        &self,
+        func: &mut Function,
+        var: Variable,
+        val: Value,
+    ) {
+        if !self.any_frame_head_var {
+            return;
+        }
+        let slot = self.frame_head_vars[var];
+        if slot == 0 {
+            return;
+        }
+        use alloc::collections::btree_map::Entry;
+        match func.stencil.aot_frame_head_spill.entry(val) {
+            Entry::Vacant(e) => {
+                e.insert(slot);
+            }
+            Entry::Occupied(mut e) => {
+                if *e.get() != slot && *e.get() != 0 {
+                    *e.get_mut() = 0;
+                }
+            }
+        }
+    }
+
     /// Declares a use of a variable in a given basic block. Returns the SSA value corresponding
     /// to the current SSA definition of this variable and a list of newly created Blocks that
     /// are the results of critical edge splitting for `br_table` with arguments.
@@ -366,6 +492,7 @@ impl SSABuilder {
         let val = func.dfg.append_block_param(block, ty);
         var_defs[block] = PackedOption::from(val);
         self.record_stack_map_binding(var, val);
+        self.record_frame_head_binding(func, var, val);
 
         // Now every predecessor needs to pass its definition of this variable to the newly added
         // block parameter. To do that we have to "recursively" call `use_var`, but there are two

@@ -186,6 +186,9 @@ impl Amode {
                         offset + i64::from(state.frame_layout().outgoing_args_size)
                     }
                     StackAMode::OutgoingArg(offset) => *offset,
+                    StackAMode::AotFrameHead(_) => {
+                        unimplemented!("aot_frame_head fixed spill slot: x64-only")
+                    }
                 };
                 i32::try_from(offset64).unwrap()
             }

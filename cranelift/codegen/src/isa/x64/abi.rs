@@ -1108,6 +1108,23 @@ impl From<StackAMode> for SyntheticAmode {
                     flags: MemFlagsData::trusted(),
                 })
             }
+            StackAMode::AotFrameHead(off) => {
+                // `enable_aot_body_frame`: fixed spill slot inside
+                // the embedder's frame-head reservation. Emit
+                // `[rbp + off]` directly (same encoding the embedder
+                // gets for `store(get_frame_pointer, off)` via the
+                // `amode_imm_reg_rbp` fold — one byte shorter than
+                // the equivalent `[rsp + K]` and, load-bearingly,
+                // the SAME memory location the embedder's own
+                // frame-slot accesses use, so a spilled Variable and
+                // an explicit `load(cfr, off)` agree by
+                // construction).
+                SyntheticAmode::Real(Amode::ImmReg {
+                    simm32: off,
+                    base: regs::rbp(),
+                    flags: MemFlagsData::trusted(),
+                })
+            }
         }
     }
 }

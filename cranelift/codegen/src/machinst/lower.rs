@@ -1232,6 +1232,67 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
             }
         }
 
+        // `enable_aot_body_frame`: propagate per-Value fixed spill
+        // annotations to their VRegs. Only block-param Values are
+        // annotated (by `cranelift_frontend`'s SSABuilder), and
+        // block params are never vreg-aliased, so no
+        // `resolve_vreg_alias` is needed. Skipped entirely for the
+        // stock (empty-map) case so this adds zero cost when the
+        // feature is unused.
+        if !self.f.stencil.aot_frame_head_spill.is_empty() {
+            let (mut n_annot, mut n_poison, mut n_dead, mut n_ok) = (0, 0, 0, 0);
+            for (&val, &slot) in self.f.stencil.aot_frame_head_spill.iter() {
+                n_annot += 1;
+                // Do NOT `resolve_aliases(val)`: a block param that
+                // was trivially removed (all preds agreed) is now
+                // an alias to `pred_val`, and `pred_val` may itself
+                // have been rewritten by the egraph pass into a
+                // Value that no longer exists in `dfg.values` (the
+                // egraph's union-find is separate from the dfg
+                // alias table). `value_regs` is a SecondaryMap
+                // (never panics) and returns `invalid()` for a
+                // removed/aliased/unlaid-out Value — just skip
+                // those. The surviving def either has its own
+                // annotation (another block-param on the chain)
+                // or picks one up via regalloc2's merge-coalescing
+                // when the block-param edge merges the bundles.
+                // slot == 0 (poisoned — one Value bound to two
+                // Variables with different fixed homes) is KEPT: it
+                // maps to `SpillSlot::new_fixed(0)`, which
+                // regalloc2's merge treats as conflicting with
+                // every real fixed slot (so this VReg's bundle
+                // never merges into a fixed spillset — its spill
+                // would land in cfr[K] and corrupt var_K), and
+                // `allocate_spillslots` falls through to an auto
+                // slot for it. Without this, a poisoned Value
+                // (fixed_slot=None) merges freely with a
+                // fixed_slot=K block-param → spills to cfr[K] with
+                // the OTHER Variable's value (gap-gbv-i32a SEGV).
+                if slot == 0 {
+                    n_poison += 1;
+                }
+                let regs = self.value_regs[val];
+                if regs.is_invalid() {
+                    n_dead += 1;
+                    continue;
+                }
+                if let Some(reg) = regs.only_reg() {
+                    if let Some(vreg) = reg.to_virtual_reg() {
+                        self.vcode.set_frame_head_spill(vreg.into(), slot);
+                        n_ok += 1;
+                    }
+                }
+            }
+            if std::env::var("AOT_FIXSPILL_TRACE").is_ok() {
+                eprintln!(
+                    "[fixspill] annot={n_annot} poison={n_poison} \
+                     dead={n_dead} ok={n_ok} slots={:?}",
+                    self.vcode.frame_head_slot_summary()
+                );
+            }
+            let _ = (n_annot, n_poison, n_dead, n_ok);
+        }
+
         // Now that we've emitted all instructions into the
         // VCodeBuilder, let's build the VCode.
         trace!(

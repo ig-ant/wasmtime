@@ -422,6 +422,31 @@ impl<'a> FunctionBuilder<'a> {
         self.func_ctx.variables.push(ty)
     }
 
+    /// Declare a variable whose canonical spill location is the
+    /// embedder's frame-head local at `[fp − slot×8]` (inside
+    /// `Function::aot_frame_head_bytes`; `enable_aot_body_frame`
+    /// only, x64-only). Every SSA block param the constructor
+    /// inserts for this variable is annotated in
+    /// `Function::aot_frame_head_spill`, so if regalloc2 spills the
+    /// variable it goes to that home — the SAME memory location the
+    /// embedder addresses via `store(get_frame_pointer, −slot×8)` —
+    /// instead of a second, redundant `[sp + N]` slot. When the
+    /// variable stays register-resident, the annotation costs
+    /// nothing.
+    ///
+    /// The intended use is a bytecode interpreter body: `slot` is
+    /// the interpreter-frame local index, and this makes
+    /// "regalloc-spilled" and "materialised in the interpreter
+    /// frame" the same thing.
+    ///
+    /// `slot` must be `> 0` (slot 0 is `[fp]` = the saved fp) and
+    /// `slot × word_bytes ≤ aot_frame_head_bytes`.
+    pub fn declare_var_in_frame_head(&mut self, ty: Type, slot: u32) -> Variable {
+        let var = self.func_ctx.variables.push(ty);
+        self.func_ctx.ssa.set_var_frame_head_slot(var, slot);
+        var
+    }
+
     /// Declare that all uses of the given variable must be included in stack
     /// map metadata.
     ///
@@ -499,6 +524,16 @@ impl<'a> FunctionBuilder<'a> {
         }
 
         self.func_ctx.ssa.def_var(var, val, self.position.unwrap());
+        // Frame-head fixed-spill: annotate the def value itself
+        // (in addition to any block param the SSA constructor
+        // inserts for `var`). A within-block segment where the
+        // Variable is defined and used with no intervening merge
+        // point has NO block param — the def value is the only
+        // handle regalloc2 sees. See `record_frame_head_binding`
+        // for the shared-value poison rule.
+        self.func_ctx
+            .ssa
+            .record_frame_head_binding(self.func, var, val);
         Ok(())
     }
 
@@ -710,6 +745,15 @@ impl<'a> FunctionBuilder<'a> {
                 }
             }
         }
+
+        // Transfer frame-head fixed-spill bindings from the SSA
+        // builder's per-block Variable table onto the Function.
+        // Done here (after every block is sealed and every
+        // trivial φ resolved) so every reaching-def Value is
+        // captured, not just the ones seen at `def_var`/`find_var`
+        // time. No-op when no Variable was declared with
+        // `declare_var_in_frame_head`.
+        self.func_ctx.ssa.finalize_frame_head_bindings(self.func);
 
         // If we have any values that need inclusion in stack maps, then we need
         // to run our pass to spill those values to the stack at safepoints and

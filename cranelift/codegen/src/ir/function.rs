@@ -215,6 +215,24 @@ pub struct FunctionStencil {
     /// the post-prologue rsp stays 16-aligned). Zero is a no-op.
     pub aot_frame_head_bytes: u32,
 
+    /// `enable_aot_body_frame` fixed-spill annotations: for each
+    /// `Value` in this map, if regalloc2 spills the corresponding
+    /// VReg, the spill goes to `[rbp − slot×8]` in the frame-head
+    /// reservation instead of an auto-allocated `[rsp + N]` slot.
+    /// The slot index is the embedder's frame-head local number
+    /// (`1..=aot_frame_head_bytes/8`); Cranelift never interprets it
+    /// beyond `−slot×8` as an rbp offset.
+    ///
+    /// Populated by `cranelift_frontend::declare_var_in_frame_head`
+    /// (which annotates every SSA block-param it inserts for the
+    /// Variable). Block-param Values are stable across the egraph
+    /// pass, so the annotation survives to lowering.
+    ///
+    /// Empty ⟹ every code path unchanged from stock. Ignored on
+    /// backends other than x64 (`StackAMode::AotFrameHead` is
+    /// `unimplemented!()` there).
+    pub aot_frame_head_spill: alloc::collections::BTreeMap<ir::Value, u32>,
+
     /// When set, emit a single shared epilogue per function and lower
     /// every `return` to a branch into it (instead of expanding
     /// `gen_epilogue()` inline at each `Ret`). Regalloc is unchanged —
@@ -239,6 +257,7 @@ impl FunctionStencil {
         self.debug_tags.clear();
         self.stack_limit = None;
         self.aot_frame_head_bytes = 0;
+        self.aot_frame_head_spill.clear();
         self.dedup_epilogue = false;
     }
 
@@ -441,6 +460,7 @@ impl Function {
                 stack_limit: None,
                 debug_tags: DebugTags::default(),
                 aot_frame_head_bytes: 0,
+                aot_frame_head_spill: alloc::collections::BTreeMap::new(),
                 dedup_epilogue: false,
             },
             params: FunctionParameters::new(),

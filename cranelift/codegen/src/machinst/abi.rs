@@ -280,6 +280,16 @@ pub enum StackAMode {
     Slot(i64),
     /// Offset into the callee frame's argument area.
     OutgoingArg(i64),
+    /// `enable_aot_body_frame`: an FP-relative address inside the
+    /// embedder's frame-head reservation (`[fp + off]`, `off < 0`).
+    /// Emitted only by `gen_spill`/`gen_reload` for a
+    /// `SpillSlot::is_fixed()` slot — regalloc2 was told this VReg's
+    /// canonical home IS its interpreter-frame local, so its spill
+    /// goes to `[fp − slot×8]` (the same encoding the embedder's own
+    /// `store(get_frame_pointer, −slot×8)` would produce), not a
+    /// second `[sp + N]` slot. x64-only; other backends
+    /// `unimplemented!()`.
+    AotFrameHead(i32),
 }
 
 impl StackAMode {
@@ -291,6 +301,9 @@ impl StackAMode {
             StackAMode::Slot(off) => StackAMode::Slot(off.checked_add(i64::from(offset)).unwrap()),
             StackAMode::OutgoingArg(off) => {
                 StackAMode::OutgoingArg(off.checked_add(i64::from(offset)).unwrap())
+            }
+            StackAMode::AotFrameHead(off) => {
+                StackAMode::AotFrameHead(off.checked_add(offset as i32).unwrap())
             }
         }
     }
@@ -2436,16 +2449,43 @@ impl<M: ABIMachineSpec> Callee<M> {
         self.frame_layout().spillslot_offset(slot)
     }
 
+    /// Compute the addressing mode for a spill slot. Auto-allocated
+    /// slots go through `spillslot_offset` (rsp-relative); fixed
+    /// slots address the embedder's frame-head reservation directly
+    /// (`[fp − slot×8]`) so the spill/reload IS the embedder's
+    /// canonical frame store/load — same encoding, one storage
+    /// location. See `Function::vreg_fixed_spillslot`.
+    fn spillslot_amode(&self, slot: SpillSlot) -> StackAMode {
+        if slot.is_fixed() {
+            let idx = slot.fixed_index();
+            // idx > 0: slot 0 is `[fp+0]` = the saved frame
+            // pointer. A slot-0 fixed slot is the POISON sentinel
+            // (see `record_frame_head_binding`) which the
+            // allocator filters before it reaches here; this
+            // assert is the last line of defence against a leak.
+            debug_assert!(
+                idx > 0
+                    && (idx as u32) * (M::word_bytes())
+                        <= self.frame_layout().aot_frame_head_size,
+                "fixed spill slot {idx} outside frame-head reservation \
+                 (1..={} slots)",
+                self.frame_layout().aot_frame_head_size / M::word_bytes()
+            );
+            StackAMode::AotFrameHead(-((idx as i32) * M::word_bytes() as i32))
+        } else {
+            StackAMode::Slot(self.get_spillslot_offset(slot))
+        }
+    }
+
     /// Generate a spill.
     pub fn gen_spill(&self, to_slot: SpillSlot, from_reg: RealReg) -> M::I {
         let ty = M::I::canonical_type_for_rc(from_reg.class());
         debug_assert_eq!(<M>::I::rc_for_type(ty).unwrap().1, &[ty]);
 
-        let sp_off = self.get_spillslot_offset(to_slot);
-        trace!("gen_spill: {from_reg:?} into slot {to_slot:?} at offset {sp_off}");
+        let mem = self.spillslot_amode(to_slot);
+        trace!("gen_spill: {from_reg:?} into slot {to_slot:?} at {mem:?}");
 
-        let from = StackAMode::Slot(sp_off);
-        <M>::gen_store_stack(from, Reg::from(from_reg), ty)
+        <M>::gen_store_stack(mem, Reg::from(from_reg), ty)
     }
 
     /// Generate a reload (fill).
@@ -2453,11 +2493,10 @@ impl<M: ABIMachineSpec> Callee<M> {
         let ty = M::I::canonical_type_for_rc(to_reg.to_reg().class());
         debug_assert_eq!(<M>::I::rc_for_type(ty).unwrap().1, &[ty]);
 
-        let sp_off = self.get_spillslot_offset(from_slot);
-        trace!("gen_reload: {to_reg:?} from slot {from_slot:?} at offset {sp_off}");
+        let mem = self.spillslot_amode(from_slot);
+        trace!("gen_reload: {to_reg:?} from slot {from_slot:?} at {mem:?}");
 
-        let from = StackAMode::Slot(sp_off);
-        <M>::gen_load_stack(from, to_reg.map(Reg::from), ty)
+        <M>::gen_load_stack(mem, to_reg.map(Reg::from), ty)
     }
 
     /// Provide metadata to be emitted alongside machine code.

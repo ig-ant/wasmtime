@@ -260,6 +260,9 @@ impl From<StackAMode> for MemArg {
             },
             StackAMode::Slot(off) => MemArg::SlotOffset { off },
             StackAMode::OutgoingArg(off) => MemArg::OutgoingArgOffset { off },
+            StackAMode::AotFrameHead(_) => {
+                unimplemented!("aot_frame_head fixed spill slot: x64-only")
+            }
         }
     }
 }

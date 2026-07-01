@@ -201,6 +201,14 @@ pub struct VCode<I: VCodeInst> {
     /// Value labels for debuginfo attached to vregs.
     debug_value_labels: Vec<(VReg, InsnIndex, InsnIndex, u32)>,
 
+    /// `enable_aot_body_frame`: for each VReg lowered from a Value
+    /// in `Function::aot_frame_head_spill`, the frame-head slot
+    /// index (`[fp − slot×8]`) that regalloc2 should use as its
+    /// canonical spill location. Empty ⟹ every `RegallocFunction::
+    /// vreg_fixed_spillslot` call returns `None` and the whole
+    /// fixed-slot machinery is a no-op.
+    frame_head_spill: FxHashMap<VReg, u32>,
+
     pub(crate) sigs: SigSet,
 
     log2_min_function_alignment: u8,
@@ -349,6 +357,34 @@ impl<I: VCodeInst> VCodeBuilder<I> {
 
     pub fn add_block_param(&mut self, param: VirtualReg) {
         self.vcode.block_params.push(param.into());
+    }
+
+    /// `enable_aot_body_frame`: bind `vreg`'s spill slot to the
+    /// embedder's frame-head local at `[fp − slot×8]`. Called once
+    /// per annotated Value from `Lower::lower` (right before
+    /// `build()`); regalloc2's `vreg_fixed_spillslot` reads this
+    /// map. An empty map is a no-op — the guard in `Lower` skips
+    /// this entirely when `Function::aot_frame_head_spill` is
+    /// empty, so the default build path takes zero extra hash
+    /// lookups.
+    pub fn set_frame_head_spill(&mut self, vreg: VReg, slot: u32) {
+        // slot > 0: real frame-head local. slot == 0: POISON — the
+        // Value is shared across two Variables with different fixed
+        // homes; this VReg must NOT merge into any fixed spillset
+        // (its spill would corrupt the other Variable's cfr slot).
+        // regalloc2's merge sees `new_fixed(0)` as conflicting with
+        // every real fixed slot; `allocate_spillslots` falls
+        // through to auto for slot 0.
+        self.vcode.frame_head_spill.insert(vreg, slot);
+    }
+
+    /// Debug: distinct frame-head slot values registered so far.
+    pub fn frame_head_slot_summary(&self) -> alloc::vec::Vec<(u32, usize)> {
+        let mut m: alloc::collections::BTreeMap<u32, usize> = Default::default();
+        for &s in self.vcode.frame_head_spill.values() {
+            *m.entry(s).or_default() += 1;
+        }
+        m.into_iter().collect()
     }
 
     fn add_branch_args_for_succ(&mut self, args: &[Reg]) {
@@ -650,6 +686,7 @@ impl<I: VCodeInst> VCode<I> {
             emit_info,
             constants,
             debug_value_labels: vec![],
+            frame_head_spill: FxHashMap::default(),
             log2_min_function_alignment,
         }
     }
@@ -1714,6 +1751,22 @@ impl<I: VCodeInst> RegallocFunction for VCode<I> {
 
     fn spillslot_size(&self, regclass: RegClass) -> usize {
         self.abi.get_spillslot_size(regclass) as usize
+    }
+
+    fn vreg_fixed_spillslot(&self, vreg: VReg) -> Option<SpillSlot> {
+        // `enable_aot_body_frame`: the embedder pre-declared this
+        // VReg's home to be its interpreter-frame local at
+        // `[fp − slot×8]`. Return a fixed `SpillSlot` whose
+        // `fixed_index() == slot`; `Callee::spillslot_amode`
+        // recognises `is_fixed()` and emits the `[fp − slot×8]`
+        // encoding directly. `frame_head_spill` is empty for every
+        // stock caller, so this early-outs on the first hash miss.
+        if self.frame_head_spill.is_empty() {
+            return None;
+        }
+        self.frame_head_spill
+            .get(&vreg)
+            .map(|&slot| SpillSlot::new_fixed(slot as usize))
     }
 
     fn allow_multiple_vreg_defs(&self) -> bool {

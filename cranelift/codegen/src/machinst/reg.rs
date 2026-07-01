@@ -522,6 +522,22 @@ pub trait OperandVisitorImpl: OperandVisitor {
         );
     }
 
+    /// Add a use constrained to the stack (regalloc's spill slot
+    /// for this vreg) at the start of the instruction. When the
+    /// vreg has a fixed frame-head slot (`vreg_fixed_spillslot`),
+    /// this pins the value to `[fp − slot×8]` at this point —
+    /// regalloc emits a spill only if the vreg is currently
+    /// register-resident. Emitted by the `frame_head_pin`
+    /// pseudo-instruction; the MInst itself emits zero bytes.
+    fn reg_stack_use(&mut self, reg: &mut impl AsMut<Reg>) {
+        self.add_operand(
+            reg.as_mut(),
+            OperandConstraint::Stack,
+            OperandKind::Use,
+            OperandPos::Early,
+        );
+    }
+
     /// Add a use that can be allocated to either a register or a
     /// spillslot, at the end of the instruction (`After` position).
     fn any_late_use(&mut self, reg: &mut impl AsMut<Reg>) {

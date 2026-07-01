@@ -1830,8 +1830,10 @@ pub(crate) fn emit(
             sink.add_unwind(inst.clone());
         }
 
-        Inst::DummyUse { .. } => {
-            // Nothing.
+        Inst::DummyUse { .. } | Inst::StackUse { .. } => {
+            // Nothing. `StackUse` is a pure regalloc constraint
+            // (`OperandConstraint::Stack`); the spill it may
+            // trigger is emitted as a preceding `Edit::Move`.
         }
 
         Inst::LabelAddress { dst, label } => {

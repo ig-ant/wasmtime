@@ -316,6 +316,13 @@
        ;; A pseudoinstruction that just keeps a value alive.
        (DummyUse (reg Reg))
 
+       ;; A pseudoinstruction that constrains a value to be in its
+       ;; regalloc stack home at this program point. Emits zero
+       ;; bytes. Under `enable_aot_body_frame` with a fixed
+       ;; frame-head slot, that home is `[rbp − slot×8]` — so this
+       ;; is "make cfr[r] current, spilling only if not already".
+       (StackUse (reg Reg))
+
        ;; A pseudoinstruction that loads the address of a label.
        (LabelAddress (dst WritableGpr)
                      (label MachLabel))
@@ -4967,6 +4974,15 @@
 (decl mov_to_preg (PReg Gpr) SideEffectNoResult)
 (rule (mov_to_preg dst src)
       (SideEffectNoResult.Inst (MInst.MovToPReg src dst)))
+
+;; `frame_head_pin` lowering: a zero-byte MInst whose only
+;; operand is a Stack-constrained use of `r`. regalloc2 splits
+;; the bundle here if `r` is register-resident and spills it to
+;; its (fixed) stack home; if already there, no edit. See
+;; `MInst.StackUse` and `OperandVisitorImpl::reg_stack_use`.
+(decl x64_stack_use (Gpr) SideEffectNoResult)
+(rule (x64_stack_use r)
+      (SideEffectNoResult.Inst (MInst.StackUse (gpr_to_reg r))))
 
 (decl load_to_preg (PReg SyntheticAmode) SideEffectNoResult)
 (rule (load_to_preg dst addr)

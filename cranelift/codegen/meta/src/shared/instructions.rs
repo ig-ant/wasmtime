@@ -1298,6 +1298,35 @@ pub(crate) fn define(
 
     ig.push(
         Inst::new(
+            "frame_head_pin",
+            r#"
+        Constrain a value to be materialised in its stack home at
+        this program point. Pure regalloc constraint — emits zero
+        bytes.
+
+        Under `enable_aot_body_frame` with the value bound to a
+        frame-head Variable (`declare_var_in_frame_head`), regalloc's
+        stack home for the value IS the interpreter-frame local at
+        `[fp − slot×8]`. Placing this instruction before a call that
+        reads that slot directly (bytecode stub taking `cfr` +
+        `dst`/`src` indices) makes regalloc emit a spill only when
+        the value is register-resident (1i); when it's already in
+        the slot from a prior spill, regalloc emits nothing (0i).
+        This replaces an unconditional explicit `store [fp−r×8], v`
+        with a conditional-on-regalloc-state one.
+
+        `other_side_effects` so egraph does not hoist/DCE it (it's a
+        program-point constraint). x64-only; other backends
+        `unimplemented!()`.
+        "#,
+            &formats.unary,
+        )
+        .operands_in(vec![Operand::new("addr", iAddr)])
+        .other_side_effects(),
+    );
+
+    ig.push(
+        Inst::new(
             "get_frame_pointer",
             r#"
         Get the address in the frame pointer register.

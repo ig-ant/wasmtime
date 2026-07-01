@@ -4564,6 +4564,19 @@
        (x64_movrm $I64 (to_amode flags address offset)
                        (gpr_new (rbp_as_reg)))))
 
+;; Rules for `frame_head_pin` ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Constrain a value to be materialised in its stack home at this
+;; program point. Zero-byte MInst; the operand's Stack constraint
+;; is what does the work (regalloc2 splits + spills to the vreg's
+;; fixed frame-head slot if register-resident; nothing if already
+;; there). Under `enable_aot_body_frame` this replaces an
+;; unconditional `store [rbp−r×8], v` with a conditional-on-
+;; regalloc-state one — the M2v2 `bssa_spill_for_call` elimination.
+
+(rule (lower (frame_head_pin a @ (value_type (fits_in_64 _))))
+      (side_effect (x64_stack_use a)))
+
 ;; Rules for `set_pinned_reg` ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (rule (lower (set_pinned_reg a @ (value_type ty)))

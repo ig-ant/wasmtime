@@ -109,6 +109,7 @@ impl Inst {
             | Inst::CoffTlsGetAddr { .. }
             | Inst::Unwind { .. }
             | Inst::DummyUse { .. }
+            | Inst::StackUse { .. }
             | Inst::LabelAddress { .. }
             | Inst::SequencePoint => true,
 
@@ -841,6 +842,11 @@ impl PrettyPrint for Inst {
                 format!("dummy_use {reg}")
             }
 
+            Inst::StackUse { reg } => {
+                let reg = pretty_print_reg(*reg, 8);
+                format!("stack_use {reg}")
+            }
+
             Inst::LabelAddress { dst, label } => {
                 let dst = pretty_print_reg(dst.to_reg().to_reg(), 8);
                 format!("label_address {dst}, {label:?}")
@@ -1218,6 +1224,10 @@ fn x64_get_operands(inst: &mut Inst, collector: &mut impl OperandVisitor) {
 
         Inst::DummyUse { reg } => {
             collector.reg_use(reg);
+        }
+
+        Inst::StackUse { reg } => {
+            collector.reg_stack_use(reg);
         }
 
         Inst::LabelAddress { dst, .. } => {

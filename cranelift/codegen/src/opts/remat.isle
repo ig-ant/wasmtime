@@ -38,3 +38,9 @@
 ;; fixed-arg call site.
 (rule (simplify x @ (stack_addr _ _ _))
       (remat x))
+;; get_frame_pointer lowers to a single reg-move from a fixed preg
+;; (`mov r,%rbp` on x64, `mov r,fp` on aarch64). Same rationale as
+;; stack_addr: without this, N per-site emissions GVN to one
+;; entry-block value that spills body-wide.
+(rule (simplify x @ (get_frame_pointer _))
+      (remat x))

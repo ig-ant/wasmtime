@@ -415,6 +415,7 @@ impl<'a> Elaborator<'a> {
     fn maybe_remat_arg(
         remat_values: &FxHashSet<Value>,
         func: &mut Function,
+        value_to_best_value: &SecondaryMap<Value, BestEntry>,
         remat_copies: &mut FxHashMap<(Block, Value), Value>,
         insert_block: Block,
         before: Inst,
@@ -427,8 +428,21 @@ impl<'a> Elaborator<'a> {
         // would affect, e.g., adds-with-one-constant-arg, which are
         // currently rematerialized. Right now we don't do this, to
         // avoid the need for another fixpoint loop here.
-        if arg.in_block != insert_block && remat_values.contains(&arg.value) {
-            let new_value = match remat_copies.entry((insert_block, arg.value)) {
+        //
+        // `remat_values` is keyed on the *original* eclass-representative
+        // Value that the `(remat ...)` ISLE ctor saw during simplify. When
+        // an already-placed instruction is cloned during elaboration
+        // (`process_elab_stack`, the `clone_inst` path), the clone's fresh
+        // result Value is what shows up here as `arg.value`, and it is not
+        // in `remat_values` even though the clone is exactly the
+        // instruction we intended to rematerialize. Canonicalize through
+        // `value_to_best_value` (which the clone path already keeps in
+        // sync) so remat fires regardless of which duplicate reaches this
+        // use site.
+        let canonical_value = value_to_best_value[arg.value].1;
+        debug_assert_ne!(canonical_value, Value::reserved_value());
+        if arg.in_block != insert_block && remat_values.contains(&canonical_value) {
+            let new_value = match remat_copies.entry((insert_block, canonical_value)) {
                 HashEntry::Occupied(o) => *o.get(),
                 HashEntry::Vacant(v) => {
                     let inst = func.dfg.value_def(arg.value).inst().unwrap();
@@ -637,6 +651,7 @@ impl<'a> Elaborator<'a> {
                         if Self::maybe_remat_arg(
                             &self.remat_values,
                             &mut self.func,
+                            &self.value_to_best_value,
                             &mut self.remat_copies,
                             insert_block,
                             before,
@@ -784,6 +799,7 @@ impl<'a> Elaborator<'a> {
                 Self::maybe_remat_arg(
                     &self.remat_values,
                     &mut self.func,
+                    &self.value_to_best_value,
                     &mut self.remat_copies,
                     block,
                     inst,

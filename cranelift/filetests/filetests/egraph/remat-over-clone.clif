@@ -1,0 +1,72 @@
+test optimize
+set opt_level=speed
+target x86_64
+
+;; A rematerializable value (iconst here) used in two sibling domtree
+;; subtrees is placed once by elaboration and then *cloned* into the
+;; second subtree. Before the clone-key fix, `maybe_remat_arg` looked
+;; up `arg.value` — the clone's fresh result Value — in `remat_values`,
+;; which is keyed on the *original* eclass Value the ISLE `(remat ..)`
+;; ctor saw. So a use of the clone in a *child* block failed the
+;; membership check and reused the parent-block clone instead of
+;; rematerializing, even though `iconst` is unconditionally covered by
+;; remat.isle.
+;;
+;; With the fix, `maybe_remat_arg` canonicalizes through
+;; `value_to_best_value` (which the clone path already keeps in sync),
+;; so remat fires in every block regardless of which sibling got the
+;; original vs the clone.
+;;
+;; The test is symmetric (both domtree children of block0 have their own
+;; nested children) so it is independent of domtree-preorder child order:
+;; whichever of {block1, block4} is elaborated second receives the clone,
+;; and its children are the ones that would previously miss remat.
+
+function %remat_over_clone(i64) -> i64 {
+    fn0 = %g(i64) -> i64
+
+block0(v0: i64):
+    v1 = iconst.i64 42
+    brif v0, block1, block4
+
+block1:
+    v2 = call fn0(v1)
+    brif v2, block2, block3
+
+block2:
+    v3 = call fn0(v1)
+    return v3
+
+block3:
+    v4 = call fn0(v1)
+    return v4
+
+block4:
+    v5 = call fn0(v1)
+    brif v5, block5, block6
+
+block5:
+    v6 = call fn0(v1)
+    return v6
+
+block6:
+    v7 = call fn0(v1)
+    return v7
+}
+
+;; Every block that consumes the constant must carry its own iconst.
+;; Before the fix, the two leaf blocks under whichever sibling was
+;; elaborated second reused the parent-block clone (no local iconst).
+
+; check:  block1:
+; nextln:     iconst.i64 42
+; check:  block2:
+; nextln:     iconst.i64 42
+; check:  block3:
+; nextln:     iconst.i64 42
+; check:  block4:
+; nextln:     iconst.i64 42
+; check:  block5:
+; nextln:     iconst.i64 42
+; check:  block6:
+; nextln:     iconst.i64 42

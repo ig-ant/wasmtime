@@ -29,3 +29,11 @@
       (remat x))
 (rule (simplify x @ (f64const _ _))
       (remat x))
+
+;; get_frame_pointer is nullary and pure-for-egraph, so N per-site
+;; emissions GVN to a single entry-block Value that is live body-wide.
+;; It lowers to a single reg-move from a fixed preg on every backend
+;; (`mov r,%rbp` on x64, `mov r,fp` on aarch64), so re-emitting per
+;; block is strictly cheaper than a spill/reload pair.
+(rule (simplify x @ (get_frame_pointer _))
+      (remat x))

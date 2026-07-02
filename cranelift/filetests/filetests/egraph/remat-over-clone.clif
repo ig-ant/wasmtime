@@ -1,5 +1,6 @@
 test optimize
 set opt_level=speed
+set preserve_frame_pointers=true
 target x86_64
 
 ;; A rematerializable value (iconst here) used in two sibling domtree
@@ -70,3 +71,29 @@ block6:
 ; nextln:     iconst.i64 42
 ; check:  block6:
 ; nextln:     iconst.i64 42
+
+;; get_frame_pointer is nullary + pure, so it GVN-hoists to one
+;; entry-block value. With the remat.isle rule, elaboration should
+;; clone it into each using block just like iconst.
+
+function %remat_get_frame_pointer(i64) -> i64 {
+    fn0 = %g(i64) -> i64
+
+block0(v0: i64):
+    brif v0, block1, block2
+
+block1:
+    v1 = get_frame_pointer.i64
+    v2 = call fn0(v1)
+    return v2
+
+block2:
+    v3 = get_frame_pointer.i64
+    v4 = call fn0(v3)
+    return v4
+}
+
+; check:  block1:
+; nextln:     get_frame_pointer.i64
+; check:  block2:
+; nextln:     get_frame_pointer.i64
